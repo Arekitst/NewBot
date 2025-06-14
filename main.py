@@ -299,17 +299,33 @@ async def cmd_profile(message: Message):
     try:
         target_user_msg = message.reply_to_message or message
         user_id = target_user_msg.from_user.id
-        await add_user(user_id, target_user_msg.from_user.username or target_user_msg.from_user.full_name)
+        username = target_user_msg.from_user.username or target_user_msg.from_user.full_name
+
+        # 🔧 Добавим юзера, если не существует
+        await add_user(user_id, username)
         user = await get_user(user_id)
         if not user:
-            await message.answer("Не удалось найти или создать профиль пользователя.")
+            await message.answer("Профиль не найден и не удалось создать.")
             return
 
+        # 🔧 Заполним нулями пустые поля
+        defaulted = {
+            "balance": 0,
+            "level": 0,
+            "prefix_end": 0,
+            "antitar_end": 0,
+            "vip_end": 0,
+            "partner_id": 0,
+        }
+        for key, default in defaulted.items():
+            if user[key] is None:
+                await update_user_field(user_id, key, default)
+
         await check_items(user_id)
-        user = await get_user(user_id)
-        
-        balance = user["balance"] or 0
-        level = user["level"] or 0
+        user = await get_user(user_id)  # ещё раз после обновлений
+
+        balance = user["balance"]
+        level = user["level"]
 
         now = int(datetime.now().timestamp())
         def format_item(end_timestamp):
@@ -322,28 +338,29 @@ async def cmd_profile(message: Message):
         if user["partner_id"]:
             partner_name = await get_user_mention_by_id(user['partner_id'])
             partner_status = f"в отношениях с {partner_name}"
-            
+
         profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {target_user_msg.from_user.full_name}"
-        
-        text = (f"{profile_title}:\n"
-                f"Уровень: {level} 🐍\n"
-                f"Баланс: {balance} 🦎\n"
-                f"Статус: {partner_status}\n\n"
-                f"Префикс: {format_item(user['prefix_end'])}\n"
-                f"Антитар: {format_item(user['antitar_end'])}\n"
-                f"VIP: {format_item(user['vip_end'])}")
+
+        text = (
+            f"{profile_title}:\n"
+            f"Уровень: {level} 🐍\n"
+            f"Баланс: {balance} 🦎\n"
+            f"Статус: {partner_status}\n\n"
+            f"Префикс: {format_item(user['prefix_end'])}\n"
+            f"Антитар: {format_item(user['antitar_end'])}\n"
+            f"VIP: {format_item(user['vip_end'])}"
+        )
 
         kb = InlineKeyboardBuilder()
         kb.add(types.InlineKeyboardButton(text="🐍 Пройти викторину", callback_data="start_quiz"))
         kb.add(types.InlineKeyboardButton(text="🐾 Мой питомец", callback_data="my_pet_profile"))
         kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
         kb.adjust(1)
-        
+
         await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except Exception as e:
-        logger.exception(f"Error in profile command: {e}")
-        await message.answer("Произошла ошибка при получении профиля.")
-
+        logger.exception(f"Ошибка в команде /profile: {e}")
+        await message.answer("⚠️ Произошла ошибка при получении профиля.")
 @dp.message(or_f(Command("hunt", "охота"), F.text.lower().in_(['hunt', 'охота'])))
 async def cmd_hunt(message: Message):
     user_id = message.from_user.id
