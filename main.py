@@ -467,18 +467,36 @@ async def cmd_pay(message: Message, command: CommandObject = None):
 
 # --- ИГРОВЫЕ МЕХАНИКИ ---
 
-@dp.message(or_f(Command("casino", "казино"), F.text.lower().startswith(('casino ', 'казино '))))
-async def cmd_casino(message: Message, command: CommandObject):
+# Замените вашу старую функцию cmd_casino на эту целиком
+
+@dp.message(or_f(
+    Command("casino", "казино"),
+    F.text.lower().in_(['casino', 'казино']), # <-- НОВОЕ: реагирует на точное слово "казино"
+    F.text.lower().startswith(('casino ', 'казино ')) # Реагирует на "казино [ставка]"
+))
+async def cmd_casino(message: Message, command: CommandObject = None):
     user_id = message.from_user.id
     await add_user(user_id, message.from_user.username or message.from_user.full_name)
     user_data = await get_user(user_id)
 
-    if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/casino 100`")
+    # НОВОЕ: Более надежное извлечение аргументов (суммы ставки)
+    args = None
+    if command and command.args:
+        args = command.args
+    elif ' ' in message.text:
+        # Пытаемся извлечь аргумент, если сообщение было "казино 100"
+        try:
+            args = message.text.split(maxsplit=1)[1]
+        except IndexError:
+            args = None
+
+    if not args:
+        # Если пользователь написал просто "казино" или "/казино", бот попросит указать ставку
+        await message.reply("❗️ Укажите вашу ставку.\nПример: `казино 100`")
         return
 
     try:
-        bet = int(command.args)
+        bet = int(args)
         if bet <= 0:
             raise ValueError
     except ValueError:
@@ -497,6 +515,8 @@ async def cmd_casino(message: Message, command: CommandObject):
     kb.adjust(2, 1)
 
     await message.reply(f"🎰 Ваша ставка: {bet} 🦎. Выберите цвет:", reply_markup=kb.as_markup())
+
+
 
 @dp.callback_query(F.data.startswith("casino_play:"))
 async def cb_casino_play(callback: CallbackQuery):
@@ -562,7 +582,9 @@ async def cb_casino_play(callback: CallbackQuery):
     except TelegramBadRequest:
         pass
 
-@dp.message(or_f(Command("dice", "кости"), F.text.lower().startswith(('кости ', 'dice '))))
+@dp.message(or_f(Command("dice", "кости"), 
+                 F.text.lower().in_(['dice', 'кости']),
+                 F.text.lower().startswith(('кости ', 'dice '))))
 async def cmd_dice(message: Message, command: CommandObject):
     if message.chat.type == 'private':
         await message.reply("Эту игру можно использовать только в группах.")
