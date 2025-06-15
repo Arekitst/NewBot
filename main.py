@@ -4,14 +4,13 @@ from datetime import datetime
 import os
 import json
 import asyncio
-import html # <-- Добавлен стандартный модуль Python для безопасной работы с HTML
+import html
 
 import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
 from aiogram.utils.markdown import hlink
-# Убраны все проблемные импорты 'quote'
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -136,6 +135,7 @@ async def db_execute(query, *params, fetch=None):
             return None
 
 async def init_db():
+    # Проверка и создание таблицы users
     await db_execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -152,6 +152,7 @@ async def init_db():
             vip_end BIGINT DEFAULT 0
         );
     """)
+    # Проверка и создание таблицы pets
     await db_execute("""
         CREATE TABLE IF NOT EXISTS pets (
             pet_id SERIAL PRIMARY KEY,
@@ -166,6 +167,7 @@ async def init_db():
             creation_date BIGINT
         );
     """)
+    # Проверка и создание таблицы user_eggs
     await db_execute("""
         CREATE TABLE IF NOT EXISTS user_eggs (
             user_egg_id SERIAL PRIMARY KEY,
@@ -173,6 +175,7 @@ async def init_db():
             egg_type TEXT
         );
     """)
+    # Проверка и создание таблицы quiz_questions
     await db_execute("""
         CREATE TABLE IF NOT EXISTS quiz_questions (
             question_id SERIAL PRIMARY KEY,
@@ -181,7 +184,30 @@ async def init_db():
             correct_answer TEXT NOT NULL
         );
     """)
-    logger.info("Проверка таблиц в БД завершена.")
+
+    # НОВОЕ: Проверка и создание таблицы casino_logs
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS casino_logs (
+            log_id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            bet_amount BIGINT NOT NULL,
+            win_amount BIGINT NOT NULL,
+            timestamp BIGINT NOT NULL
+        );
+    """)
+
+    # НОВОЕ: Проверка и добавление колонок для настроек приватности
+    user_columns = await db_execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'", fetch='all')
+    user_column_names = [c['column_name'] for c in user_columns]
+    if 'hide_balance' not in user_column_names:
+        await db_execute("ALTER TABLE users ADD COLUMN hide_balance BOOLEAN DEFAULT FALSE;")
+        logger.info("Добавлена колонка 'hide_balance' в таблицу users.")
+    if 'hide_level' not in user_column_names:
+        await db_execute("ALTER TABLE users ADD COLUMN hide_level BOOLEAN DEFAULT FALSE;")
+        logger.info("Добавлена колонка 'hide_level' в таблицу users.")
+
+    logger.info("Проверка всех таблиц в БД завершена.")
+
 
 async def populate_questions():
     count_record = await db_execute("SELECT COUNT(*) FROM quiz_questions", fetch='one')
@@ -196,7 +222,6 @@ async def populate_questions():
         logger.info(f"Добавлено {len(questions)} вопросов в базу данных.")
 
 # --- Функции для работы с данными ---
-
 async def get_user(user_id: int):
     return await db_execute("SELECT * FROM users WHERE user_id = $1", user_id, fetch='one')
 
@@ -240,10 +265,6 @@ async def get_random_question():
 # --- Вспомогательные функции ---
 
 async def get_user_display_name(user_id: int, user_record=None) -> str:
-    """
-    Возвращает HTML-безопасный никнейм пользователя, если он есть, 
-    иначе - кликабельное HTML-упоминание.
-    """
     if not user_record:
         user_record = await get_user(user_id)
     
@@ -313,7 +334,10 @@ async def cmd_start(message: Message):
             "💖 `/marry` / `женить` (в ответ) — сделать предложение.\n"
             "🥚 `/eggshop` / `магазиняиц` — магазин яиц.\n"
             "🐾 `/mypet` / `мойпитомец` — управление питомцем.\n"
-            "📞 `/ping` / `пинг` — позвать игроков в чате."
+            "📞 `/ping` / `пинг` — позвать игроков в чате.\n\n"
+            "<b>Прочее:</b>\n"
+            "⚙️ `/privacy` — Настройки конфиденциальности (в лс).\n"
+            "📊 `/casinostats` — Статистика казино за 24ч."
         )
         await message.answer(tutorial_text, parse_mode="HTML")
     else:
@@ -324,9 +348,8 @@ async def cmd_profile(message: Message):
     try:
         target_user_msg = message.reply_to_message or message
         user_id = target_user_msg.from_user.id
-        username = target_user_msg.from_user.username or target_user_msg.from_user.full_name
-
-        await add_user(user_id, username)
+        
+        await add_user(user_id, target_user_msg.from_user.username or target_user_msg.from_user.full_name)
         user = await get_user(user_id)
         if not user:
             await message.answer("Профиль не найден и не удалось создать.")
@@ -335,9 +358,16 @@ async def cmd_profile(message: Message):
         await check_items(user_id)
         user = await get_user(user_id)
 
-        balance = user.get("balance", 0)
-        level = user.get("level", 0)
+        # НОВОЕ: Проверка настроек приватности
+        balance_str = str(user.get("balance", 0))
+        level_str = str(user.get("level", 0))
 
+        if message.chat.type != 'private':
+            if user.get('hide_balance', False):
+                balance_str = "[скрыто]"
+            if user.get('hide_level', False):
+                level_str = "[скрыто]"
+        
         now = int(datetime.now().timestamp())
         def format_item(end_timestamp):
             if end_timestamp and end_timestamp > now:
@@ -357,8 +387,8 @@ async def cmd_profile(message: Message):
             f"{profile_title}:\n\n"
             f"Ник: {profile_owner_display_name}\n"
             f"ID: <code>{user_id}</code>\n\n"
-            f"Уровень: {level} 🐍\n"
-            f"Баланс: {balance} 🦎\n"
+            f"Уровень: {level_str} 🐍\n"
+            f"Баланс: {balance_str} 🦎\n"
             f"Статус: {partner_status}\n\n"
             f"<b>Улучшения:</b>\n"
             f"Префикс: {format_item(user.get('prefix_end'))}\n"
@@ -367,9 +397,9 @@ async def cmd_profile(message: Message):
         )
 
         kb = InlineKeyboardBuilder()
-        kb.add(types.InlineKeyboardButton(text="🐍 Пройти викторину", callback_data="start_quiz"))
-        kb.add(types.InlineKeyboardButton(text="🐾 Мой питомец", callback_data="my_pet_profile"))
-        kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
+        kb.add(types.InlineKeyboardButton(text="🐍 Пройти викторину", callback_data=f"quiz:start:{user_id}"))
+        kb.add(types.InlineKeyboardButton(text="🐾 Мой питомец", callback_data=f"pet:profile:{user_id}"))
+        kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data=f"shop:main:{user_id}"))
         kb.adjust(1)
 
         await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
@@ -465,33 +495,102 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     recipient_mention = await get_user_display_name(recipient.id)
     await message.answer(f"💸 <b>Перевод успешен!</b>\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.", parse_mode="HTML")
 
-# --- ИГРОВЫЕ МЕХАНИКИ ---
 
-# Замените вашу старую функцию cmd_casino на эту целиком
+# --- НОВЫЙ БЛОК: НАСТРОЙКИ КОНФИДЕНЦИАЛЬНОСТИ ---
 
-@dp.message(or_f(
-    Command("casino", "казино"),
-    F.text.lower().in_(['casino', 'казино']), # <-- НОВОЕ: реагирует на точное слово "казино"
-    F.text.lower().startswith(('casino ', 'казино ')) # Реагирует на "казино [ставка]"
-))
-async def cmd_casino(message: Message, command: CommandObject = None):
+async def get_privacy_keyboard(user_id: int):
+    user = await get_user(user_id)
+    kb = InlineKeyboardBuilder()
+    
+    balance_text = "✅ Скрыть баланс" if not user.get('hide_balance', False) else "❌ Показать баланс"
+    level_text = "✅ Скрыть уровень" if not user.get('hide_level', False) else "❌ Показать уровень"
+
+    kb.add(types.InlineKeyboardButton(text=balance_text, callback_data="privacy:toggle:balance"))
+    kb.add(types.InlineKeyboardButton(text=level_text, callback_data="privacy:toggle:level"))
+    return kb.as_markup()
+
+@dp.message(Command("privacy"))
+async def cmd_privacy(message: Message):
+    if message.chat.type != 'private':
+        await message.reply("Настройки конфиденциальности доступны только в личных сообщениях с ботом.")
+        return
+    
+    text = (
+        "⚙️ <b>Настройки конфиденциальности</b>\n\n"
+        "Здесь вы можете скрыть отображение вашего баланса и уровня в профилях, которые просматривают в группах."
+    )
+    kb = await get_privacy_keyboard(message.from_user.id)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("privacy:toggle:"))
+async def cb_toggle_privacy(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        _, _, field_to_toggle = callback.data.split(":")
+    except ValueError:
+        await callback.answer("Ошибка данных. Попробуйте снова.", show_alert=True)
+        return
+
+    if field_to_toggle not in ['balance', 'level']:
+        await callback.answer("Неизвестное действие", show_alert=True)
+        return
+
+    field_name = f"hide_{field_to_toggle}"
+    
+    current_user_state = await get_user(user_id)
+    current_value = current_user_state.get(field_name, False)
+    
+    await update_user_field(user_id, field_name, not current_value)
+    
+    kb = await get_privacy_keyboard(user_id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.answer(f"Настройки для '{field_to_toggle}' обновлены.")
+    except TelegramBadRequest:
+        await callback.answer("Не удалось обновить кнопки. Попробуйте вызвать /privacy снова.", show_alert=True)
+
+# --- НОВЫЙ БЛОК: СТАТИСТИКА КАЗИНО ---
+
+@dp.message(Command("casinostats"))
+async def cmd_casinostats(message: Message):
+    twenty_four_hours_ago = int(datetime.now().timestamp()) - 24 * 3600
+    
+    stats = await db_execute(
+        "SELECT SUM(win_amount) as total_won, SUM(bet_amount) as total_bet FROM casino_logs WHERE timestamp >= $1",
+        twenty_four_hours_ago,
+        fetch='one'
+    )
+
+    if not stats or stats['total_bet'] is None:
+        await message.answer("🎰 За последние 24 часа в казино не было игр.")
+        return
+
+    total_won = stats['total_won'] or 0
+    total_bet = stats['total_bet'] or 0
+    # Проиграно = Сумма всех ставок - Сумма всех выигрышей
+    total_lost = total_bet - total_won
+
+    text = (
+        f"<b>🎰 Статистика казино за последние 24 часа</b>\n\n"
+        f"💸 Всего выиграно: {total_won} 🦎\n"
+        f"📉 Всего проиграно: {total_lost} 🦎"
+    )
+    await message.answer(text, parse_mode="HTML")
+
+# --- ИГРОВЫЕ МЕХАНИКИ (КАЗИНО, КОСТИ И ДР.) ---
+
+@dp.message(or_f(Command("casino", "казино"), F.text.lower().in_(['casino', 'казино']), F.text.lower().startswith(('casino ', 'казино '))))
+async def cmd_casino(message: Message):
     user_id = message.from_user.id
     await add_user(user_id, message.from_user.username or message.from_user.full_name)
     user_data = await get_user(user_id)
 
-    # НОВОЕ: Более надежное извлечение аргументов (суммы ставки)
+    parts = message.text.split()
     args = None
-    if command and command.args:
-        args = command.args
-    elif ' ' in message.text:
-        # Пытаемся извлечь аргумент, если сообщение было "казино 100"
-        try:
-            args = message.text.split(maxsplit=1)[1]
-        except IndexError:
-            args = None
+    if len(parts) > 1:
+        args = parts[1]
 
     if not args:
-        # Если пользователь написал просто "казино" или "/казино", бот попросит указать ставку
         await message.reply("❗️ Укажите вашу ставку.\nПример: `казино 100`")
         return
 
@@ -499,7 +598,7 @@ async def cmd_casino(message: Message, command: CommandObject = None):
         bet = int(args)
         if bet <= 0:
             raise ValueError
-    except ValueError:
+    except (ValueError, TypeError):
         await message.reply("❌ Ставка должна быть положительным числом.")
         return
 
@@ -515,7 +614,6 @@ async def cmd_casino(message: Message, command: CommandObject = None):
     kb.adjust(2, 1)
 
     await message.reply(f"🎰 Ваша ставка: {bet} 🦎. Выберите цвет:", reply_markup=kb.as_markup())
-
 
 
 @dp.callback_query(F.data.startswith("casino_play:"))
@@ -534,6 +632,8 @@ async def cb_casino_play(callback: CallbackQuery):
         await callback.answer("Ой, у вас уже недостаточно средств для этой ставки.", show_alert=True)
         await callback.message.edit_text("Ставка отменена, недостаточно средств.")
         return
+
+    await callback.message.edit_text("⏳ Ставка принята. Вращаем рулетку...", reply_markup=None)
 
     new_balance = user_balance - bet
     await update_user_field(player_id, "balance", new_balance)
@@ -557,6 +657,7 @@ async def cb_casino_play(callback: CallbackQuery):
     except TelegramBadRequest:
         pass
 
+    winnings = 0
     if choice == winning_color:
         payout_multiplier = CASINO_PAYOUTS[winning_color]
         winnings = bet * payout_multiplier
@@ -577,42 +678,38 @@ async def cb_casino_play(callback: CallbackQuery):
             f"Ваш баланс: {final_balance} 🦎"
         )
     
+    # НОВОЕ: Логирование результата игры
+    await db_execute(
+        "INSERT INTO casino_logs (user_id, bet_amount, win_amount, timestamp) VALUES ($1, $2, $3, $4)",
+        player_id, bet, winnings, int(datetime.now().timestamp())
+    )
+    
     try:
         await msg.edit_text(result_text, parse_mode="HTML")
     except TelegramBadRequest:
         pass
 
-# Замените вашу старую функцию cmd_dice на эту
 
-@dp.message(or_f(
-    Command("dice", "кости"),
-    F.text.lower().in_(['dice', 'кости']), # <-- Вы правильно добавили эту строку
-    F.text.lower().startswith(('кости ', 'dice '))
-))
-async def cmd_dice(message: Message, command: CommandObject = None):
+@dp.message(or_f(Command("dice", "кости"), F.text.lower().in_(['dice', 'кости']), F.text.lower().startswith(('кости ', 'dice '))))
+async def cmd_dice(message: Message):
     if message.chat.type == 'private':
         await message.reply("Эту игру можно использовать только в группах.")
         return
 
-    # ИСПРАВЛЕНО: Добавлена надежная логика извлечения ставки
+    parts = message.text.split()
     args = None
-    if command and command.args:
-        args = command.args
-    elif ' ' in message.text:
-        try:
-            args = message.text.split(maxsplit=1)[1]
-        except IndexError:
-            args = None
+    if len(parts) > 1:
+        args = parts[1]
 
     if not args:
         await message.reply("❗️ Укажите вашу ставку.\nПример: `кости 100`")
         return
 
     try:
-        bet = int(args) # ИСПРАВЛЕНО: Используем 'args' вместо 'command.args'
+        bet = int(args)
         if bet <= 0:
             raise ValueError
-    except ValueError:
+    except (ValueError, TypeError):
         await message.reply("❌ Ставка должна быть положительным числом.")
         return
 
@@ -635,7 +732,6 @@ async def cmd_dice(message: Message, command: CommandObject = None):
         reply_markup=kb.as_markup(),
         parse_mode="HTML"
     )
-
 
 @dp.callback_query(F.data.startswith("dice_accept:"))
 async def cb_dice_accept(callback: CallbackQuery):
@@ -854,10 +950,20 @@ async def cmd_giveegg(message: Message, command: CommandObject = None):
 async def cmd_quiz(message: Message, state: FSMContext):
     await start_quiz_logic(message.from_user.id, message, state)
 
-@dp.callback_query(F.data == "start_quiz")
+@dp.callback_query(F.data.startswith("quiz:start"))
 async def cb_start_quiz(callback: CallbackQuery, state: FSMContext):
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    if callback.from_user.id != target_user_id:
+        await callback.answer("Это не ваш профиль!", show_alert=True)
+        return
+        
     await callback.answer()
-    await start_quiz_logic(callback.from_user.id, callback, state, is_callback=True)
+    await start_quiz_logic(target_user_id, callback, state, is_callback=True)
 
 async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: FSMContext, is_callback: bool = False):
     user = await get_user(user_id)
@@ -899,7 +1005,7 @@ async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: 
     
     kb = InlineKeyboardBuilder()
     for option in options:
-        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz_answer:{option}"))
+        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz:answer:{option}"))
     kb.adjust(1)
     
     text = f"🐍 <b>Вопрос викторины:</b>\n\n{question_data['question_text']}"
@@ -911,9 +1017,9 @@ async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: 
     except TelegramBadRequest:
         pass
 
-@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz_answer:"))
+@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz:answer:"))
 async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
-    user_answer = callback.data.split(":", 1)[1]
+    user_answer = callback.data.split(":", 2)[2]
     quiz_data = await state.get_data()
     correct_answer = quiz_data.get('correct_answer')
     
@@ -1035,9 +1141,19 @@ async def process_pet_name_after_hatch(message: Message, state: FSMContext):
 async def cmd_mypet(message: Message):
     await my_pet_profile_logic(message.from_user.id, message)
 
-@dp.callback_query(F.data == "my_pet_profile")
+@dp.callback_query(F.data.startswith("pet:profile"))
 async def cb_mypet(callback: CallbackQuery):
-    await my_pet_profile_logic(callback.from_user.id, callback, is_callback=True)
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    if callback.from_user.id != target_user_id:
+        await callback.answer("Это не ваш профиль!", show_alert=True)
+        return
+
+    await my_pet_profile_logic(target_user_id, callback, is_callback=True)
 
 async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_callback: bool = False):
     if is_callback: await event.answer()
@@ -1201,7 +1317,7 @@ SHOP_ITEMS = {"prefix": {"name": "Префикс", "prices": {1: 20, 3: 40, 7: 1
 def create_shop_menu():
     kb = InlineKeyboardBuilder()
     for item_id, item_data in SHOP_ITEMS.items():
-        kb.add(types.InlineKeyboardButton(text=item_data["name"], callback_data=f"shop_item:{item_id}"))
+        kb.add(types.InlineKeyboardButton(text=item_data["name"], callback_data=f"shop:item:{item_id}"))
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1210,7 +1326,7 @@ def create_item_menu(item_id: str):
     item_data = SHOP_ITEMS[item_id]
     for days, price in item_data["prices"].items():
         kb.add(types.InlineKeyboardButton(text=f"{days} дн. - {price} 🦎", callback_data=f"buy:{item_id}:{days}"))
-    kb.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="shop_main"))
+    kb.add(types.InlineKeyboardButton(text="⬅️ Назад", callback_data="shop:main:0")) # 0 - заглушка ID
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1218,14 +1334,24 @@ def create_item_menu(item_id: str):
 async def cmd_shop(message: Message):
     await message.answer("🛒 Магазин: выберите предмет для покупки.", reply_markup=create_shop_menu())
 
-@dp.callback_query(F.data == "shop_main")
+@dp.callback_query(F.data.startswith("shop:main"))
 async def cb_shop_main(callback: CallbackQuery):
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    if target_user_id != 0 and callback.from_user.id != target_user_id:
+        await callback.answer("Это не ваш профиль!", show_alert=True)
+        return
+        
     await callback.message.edit_text("🛒 Магазин: выберите предмет для покупки.", reply_markup=create_shop_menu())
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("shop_item:"))
+@dp.callback_query(F.data.startswith("shop:item:"))
 async def cb_shop_item(callback: CallbackQuery):
-    item_id = callback.data.split(":")[1]
+    item_id = callback.data.split(":")[2]
     item_name = SHOP_ITEMS[item_id]["name"]
     await callback.message.edit_text(f"Выберите срок для покупки товара «{item_name}»:", reply_markup=create_item_menu(item_id))
     await callback.answer()
@@ -1515,8 +1641,6 @@ async def main():
     await init_db()
     await populate_questions()
     
-    # Убрана строка bot.default_parse_mode = "HTML"
-    
     try:
         await dp.start_polling(bot)
     finally:
@@ -1527,3 +1651,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
