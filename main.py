@@ -5,7 +5,7 @@ import os
 import json
 import asyncio
 
-import aiosqlite
+import asyncpg  # <-- НОВАЯ БИБЛИОТЕКА
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
@@ -19,27 +19,28 @@ from aiogram.fsm.state import State, StatesGroup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- НАСТРОЙКИ БОТА ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7873522119:AAHWIa4R2MrexWmEi_wfUexTKtKB4GsxpXw")
-DB_PATH = "bot.db"
-ADMIN_IDS = [6179115044, 7189733067] # <-- НЕ ЗАБУДЬТЕ ДОБАВИТЬ СВОЙ ID
+# --- НАСТРОЙКИ БОТА (ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DB_URL") # <-- НОВАЯ ПЕРЕМЕННАЯ ДЛЯ SUPABASE
 
-# --- НАСТРОЙКИ ИГРОВОЙ ЛОГИКИ ---
-MAX_PETS = 20 # <-- НОВОЕ: Максимальное количество питомцев
+if not BOT_TOKEN or not DATABASE_URL:
+    logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменные окружения BOT_TOKEN и/или DB_URL не установлены.")
+    exit()
+
+ADMIN_IDS = [6179115044, 7189733067]
+
+# --- НАСТРОЙКИ ИГРОВОЙ ЛОГИКИ (без изменений) ---
+MAX_PETS = 20
 QUIZ_COOLDOWN_HOURS = 5
 MARRIAGE_MIN_LEVEL = 35
-PET_MIN_LEVEL = 55 # Уровень для доступа к вылуплению яиц
+PET_MIN_LEVEL = 55
 MARRIAGE_COST = 250
 PET_DEATH_DAYS = 2
 
 PET_ACTIONS_COST = {
-    "feed": 1,
-    "grow": 5,
-    "water": 2,
-    "walk": 3,
+    "feed": 1, "grow": 5, "water": 2, "walk": 3,
 }
 
-# --- НАСТРОЙКА ЯИЦ И ВИДОВ ПИТОМЦЕВ ---
 EGGS = {
     "common": {"name": "🥚 Обычное яйцо", "cost": 150, "rarity": "common"},
     "rare": {"name": "💎 Редкое яйцо", "cost": 500, "rarity": "rare"},
@@ -49,53 +50,31 @@ EGGS = {
 
 PET_SPECIES = {
     "common": [
-        {"species_name": "Полоз", "images": {
-            1: "https://i.ibb.co/4gRJSF4N/Gemini-Generated-Image-bbrjqrbbrjqrbbrj.png", 
-            10: "https://i.ibb.co/x87LKPq2/image.png",
-            35: "https://i.ibb.co/ccnTcgJX/image.png"}},
-        {"species_name": "Уж", "images": {
-            1: "https://i.ibb.co/qLBW0wN7/image.png", 
-            10: "https://i.ibb.co/Z1fRyG8R/image.png",                              
-            35: "https://i.ibb.co/Ng6pJ2wm/Gemini-Generated-Image-6z8b4s6z8b4s6z8b.png"}},
+        {"species_name": "Полоз", "images": {1: "https://i.ibb.co/4gRJSF4N/Gemini-Generated-Image-bbrjqrbbrjqrbbrj.png", 10: "https://i.ibb.co/x87LKPq2/image.png", 35: "https://i.ibb.co/ccnTcgJX/image.png"}},
+        {"species_name": "Уж", "images": {1: "https://i.ibb.co/qLBW0wN7/image.png", 10: "https://i.ibb.co/Z1fRyG8R/image.png", 35: "https://i.ibb.co/Ng6pJ2wm/Gemini-Generated-Image-6z8b4s6z8b4s6z8b.png"}},
     ],
     "rare": [
-        {"species_name": "Гадюка", "images": {
-        1: "https://i.ibb.co/xSXPC1C7/image.png", 
-            10: "https://i.ibb.co/Y4KqkSgt/image.png",
-            35: "https://i.ibb.co/rRhY1nX3/image.png"}},
-        {"species_name": "Эфа", "images": {
-        1: "https://i.ibb.co/TDnDKDJb/image.png", 
-            10: "https://i.ibb.co/XfhfSP31/image.png",
-            35: "https://i.ibb.co/prvbR5Kf/image.png"}},
+        {"species_name": "Гадюка", "images": {1: "https://i.ibb.co/xSXPC1C7/image.png", 10: "https://i.ibb.co/Y4KqkSgt/image.png", 35: "https://i.ibb.co/rRhY1nX3/image.png"}},
+        {"species_name": "Эфа", "images": {1: "https://i.ibb.co/TDnDKDJb/image.png", 10: "https://i.ibb.co/XfhfSP31/image.png", 35: "https://i.ibb.co/prvbR5Kf/image.png"}},
     ],
     "legendary": [
-        {"species_name": "Питон", "images": {
-            1: "https://i.ibb.co/WCXKKBF/image.png", 
-            10: "https://i.ibb.co/j9Q9XZTR/image.png",
-            35: "https://i.ibb.co/qYjVcqck/Gemini-Generated-Image-aofhgzaofhgzaofh.png"}},
-        {"species_name": "Кобра", "images": {
-            1: "https://i.ibb.co/DP5QFyJn/Gemini-Generated-Image-gzt9g3gzt9g3gzt9.png", 
-            10: "https://i.ibb.co/HLS6vB21/Gemini-Generated-Image-m2l12m2l12m2l12m.png",
-            35: "https://i.ibb.co/7xdG7Vmg/Gemini-Generated-Image-pcfv7cpcfv7cpcfv.png"}},
+        {"species_name": "Питон", "images": {1: "https://i.ibb.co/WCXKKBF/image.png", 10: "https://i.ibb.co/j9Q9XZTR/image.png", 35: "https://i.ibb.co/qYjVcqck/Gemini-Generated-Image-aofhgzaofhgzaofh.png"}},
+        {"species_name": "Кобра", "images": {1: "https://i.ibb.co/DP5QFyJn/Gemini-Generated-Image-gzt9g3gzt9g3gzt9.png", 10: "https://i.ibb.co/HLS6vB21/Gemini-Generated-Image-m2l12m2l12m2l12m.png", 35: "https://i.ibb.co/7xdG7Vmg/Gemini-Generated-Image-pcfv7cpcfv7cpcfv.png"}},
     ],
     "mythic": [
-        {"species_name": "Василиск", "images": {
-            1: "https://i.ibb.co/0Rtx5sb1/Gemini-Generated-Image-rxh7a8rxh7a8rxh7.png",
-            10: "https://i.ibb.co/RpBs3XxM/Gemini-Generated-Image-togzv2togzv2togz.png",
-            35: "https://i.ibb.co/FLCVtdVg/Gemini-Generated-Image-bfub33bfub33bfub.png"}},
+        {"species_name": "Василиск", "images": {1: "https://i.ibb.co/0Rtx5sb1/Gemini-Generated-Image-rxh7a8rxh7a8rxh7.png", 10: "https://i.ibb.co/RpBs3XxM/Gemini-Generated-Image-togzv2togzv2togz.png", 35: "https://i.ibb.co/FLCVtdVg/Gemini-Generated-Image-bfub33bfub33bfub.png"}},
     ]
 }
 
 PING_MESSAGES = [ "чем занимаешься?", "заходи на игру?", "как насчет катки?", "го общаться!", "скучно, давай поговорим?"]
-
-# Словарь для отслеживания активности пользователей в чатах
 recent_users_activity = {}
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+db_pool = None # <-- Пул соединений с БД
 
-# --- FSM СОСТОЯНИЯ ---
+# --- FSM СОСТОЯНИЯ (без изменений) ---
 class TopupStates(StatesGroup):
     waiting_for_amount = State()
 
@@ -105,120 +84,163 @@ class QuizStates(StatesGroup):
 class PetHatchStates(StatesGroup):
     waiting_for_name = State()
 
-# --- РАБОТА С БАЗОЙ ДАННЫХ ---
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as conn:
-        # ... (код для таблицы users остается без изменений) ...
 
-        await conn.execute("""CREATE TABLE IF NOT EXISTS pets (
-            pet_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            owner_id INTEGER, 
-            name TEXT,
-            species TEXT, 
-            pet_level INTEGER DEFAULT 1, 
-            last_fed INTEGER DEFAULT 0,
-            last_watered INTEGER DEFAULT 0, 
-            last_grown INTEGER DEFAULT 0,
-            last_walked INTEGER DEFAULT 0, 
-            creation_date INTEGER
-        )""")
+# --- РАБОТА С БАЗОЙ ДАННЫХ (POSTGRESQL / ASYNCPG) ---
+
+async def create_pool():
+    """Создает пул соединений с базой данных."""
+    global db_pool
+    try:
+        db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+        logger.info("Пул соединений с PostgreSQL успешно создан.")
+    except Exception as e:
+        logger.critical(f"Не удалось подключиться к PostgreSQL: {e}")
+        exit()
+
+async def db_execute(query, *params, fetch=None):
+    """
+    Выполняет SQL-запрос с использованием пула соединений.
+    :param query: SQL-запрос с плейсхолдерами $1, $2, ...
+    :param params: Параметры для запроса.
+    :param fetch: 'one' для получения одной записи, 'all' для всех, None для выполнения без возврата.
+    :return: Результат запроса или None.
+    """
+    global db_pool
+    if not db_pool:
+        logger.error("Пул соединений не инициализирован!")
+        return None
         
-        # Этот код для миграции старой таблицы, если она была с UNIQUE
+    async with db_pool.acquire() as connection:
         try:
-            cursor = await conn.execute("PRAGMA index_list('pets')")
-            indexes = await cursor.fetchall()
-            unique_index_exists = any('unique' in str(idx).lower() and 'owner_id' in str(idx).lower() for idx in indexes)
-            if unique_index_exists:
-                logger.info("Обнаружена старая структура таблицы 'pets'. Выполняется миграция...")
-                await conn.execute("CREATE TABLE pets_new AS SELECT * FROM pets")
-                await conn.execute("DROP TABLE pets")
-                await conn.execute("""CREATE TABLE pets (
-                    pet_id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER, name TEXT,
-                    species TEXT, pet_level INTEGER DEFAULT 1, last_fed INTEGER DEFAULT 0,
-                    last_watered INTEGER DEFAULT 0, last_grown INTEGER DEFAULT 0,
-                    last_walked INTEGER DEFAULT 0, creation_date INTEGER)""")
-                await conn.execute("INSERT INTO pets SELECT * FROM pets_new")
-                await conn.execute("DROP TABLE pets_new")
-                logger.info("Миграция таблицы 'pets' завершена.")
+            if fetch == 'one':
+                return await connection.fetchrow(query, *params)
+            elif fetch == 'all':
+                return await connection.fetch(query, *params)
+            else:
+                await connection.execute(query, *params)
+                return None
         except Exception as e:
-            logger.error(f"Ошибка при миграции таблицы pets: {e}")
+            logger.error(f"Ошибка выполнения SQL-запроса: {query} с параметрами {params}. Ошибка: {e}")
+            return None
 
-        # ... (остальной код для user_eggs и quiz_questions остается без изменений) ...
+async def init_db():
+    """Инициализирует таблицы в базе данных, если их не существует."""
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            balance BIGINT DEFAULT 0,
+            level INTEGER DEFAULT 0,
+            last_hunt BIGINT DEFAULT 0,
+            last_quiz BIGINT DEFAULT 0,
+            partner_id BIGINT DEFAULT 0,
+            proposal_from_id BIGINT DEFAULT 0,
+            prefix_end BIGINT DEFAULT 0,
+            antitar_end BIGINT DEFAULT 0,
+            vip_end BIGINT DEFAULT 0
+        );
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS pets (
+            pet_id SERIAL PRIMARY KEY,
+            owner_id BIGINT NOT NULL,
+            name TEXT,
+            species TEXT,
+            pet_level INTEGER DEFAULT 1,
+            last_fed BIGINT DEFAULT 0,
+            last_watered BIGINT DEFAULT 0,
+            last_grown BIGINT DEFAULT 0,
+            last_walked BIGINT DEFAULT 0,
+            creation_date BIGINT
+        );
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS user_eggs (
+            user_egg_id SERIAL PRIMARY KEY,
+            owner_id BIGINT,
+            egg_type TEXT
+        );
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS quiz_questions (
+            question_id SERIAL PRIMARY KEY,
+            question_text TEXT NOT NULL,
+            options JSONB NOT NULL,
+            correct_answer TEXT NOT NULL
+        );
+    """)
+    logger.info("Проверка таблиц в БД завершена.")
 
 async def populate_questions():
-    questions = [
-        ("Какая змея считается самой ядовитой в мире?", json.dumps(["Тайпан", "Черная мамба", "Гадюка", "Кобра"]), "Тайпан"),
-        ("Какая змея самая большая в мире?", json.dumps(["Анаконда", "Сетчатый питон", "Королевская кобра", "Тигровый питон"]), "Сетчатый питон"),
-        ("Есть ли у змей уши?", json.dumps(["Да, но они скрыты", "Только внутреннее ухо", "Нет", "Да, как у ящериц"]), "Только внутреннее ухо"),
-        ("Какая змея откладывает самые большие яйца?", json.dumps(["Питон", "Анаконда", "Королевская кобра", "Удав"]), "Королевская кобра"),
-        ("Что помогает змеям 'нюхать' языком?", json.dumps(["Орган Якобсона", "Ноздри", "Терморецепторы", "Кончик языка"]), "Орган Якобсона"),
-        ("Как называется процесс сбрасывания кожи у змей?", json.dumps(["Линька", "Метаморфоза", "Регенерация", "Анабиоз"]), "Линька"),
-        ("Какая змея способна 'плеваться' ядом?", json.dumps(["Ошейниковая кобра", "Гадюка Рассела", "Бушмейстер", "Эфа"]), "Ошейниковая кобра"),
-        ("Сколько примерно видов змей существует в мире?", json.dumps(["Около 1000", "Около 2000", "Около 3500", "Более 5000"]), "Около 3500"),
-        ("Какая из этих змей не ядовита?", json.dumps(["Молочная змея", "Коралловый аспид", "Тайпан", "Морская змея"]), "Молочная змея"),
-        ("Какую скорость может развить Черная мамба?", json.dumps(["До 5 км/ч", "До 10 км/ч", "До 20 км/ч", "До 30 км/ч"]), "До 20 км/ч"),
-        ("Что из этого НЕ едят змеи?", json.dumps(["Птиц", "Яйца", "Рыбу", "Траву"]), "Траву"),
-        ("Какая змея известна своим 'капюшоном'?", json.dumps(["Кобра", "Мамба", "Удав", "Питон"]), "Кобра"),
-    ]
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cursor = await conn.execute("SELECT COUNT(*) FROM quiz_questions")
-        count = (await cursor.fetchone())[0]
-        if count == 0:
-            await conn.executemany("INSERT INTO quiz_questions (question_text, options, correct_answer) VALUES (?, ?, ?)", questions)
-            await conn.commit()
-            logger.info(f"Added {len(questions)} initial questions to the database.")
+    """Заполняет таблицу вопросов, если она пуста."""
+    count_record = await db_execute("SELECT COUNT(*) FROM quiz_questions", fetch='one')
+    if count_record and count_record[0] == 0:
+        questions = [
+            ("Какая змея считается самой ядовитой в мире?", json.dumps(["Тайпан", "Черная мамба", "Гадюка", "Кобра"]), "Тайпан"),
+            ("Какая змея самая большая в мире?", json.dumps(["Анаконда", "Сетчатый питон", "Королевская кобра", "Тигровый питон"]), "Сетчатый питон"),
+            ("Есть ли у змей уши?", json.dumps(["Да, но они скрыты", "Только внутреннее ухо", "Нет", "Да, как у ящериц"]), "Только внутреннее ухо"),
+            ("Какая змея откладывает самые большие яйца?", json.dumps(["Питон", "Анаконда", "Королевская кобра", "Удав"]), "Королевская кобра"),
+            ("Что помогает змеям 'нюхать' языком?", json.dumps(["Орган Якобсона", "Ноздри", "Терморецепторы", "Кончик языка"]), "Орган Якобсона"),
+            ("Как называется процесс сбрасывания кожи у змей?", json.dumps(["Линька", "Метаморфоза", "Регенерация", "Анабиоз"]), "Линька"),
+            ("Какая змея способна 'плеваться' ядом?", json.dumps(["Ошейниковая кобра", "Гадюка Рассела", "Бушмейстер", "Эфа"]), "Ошейниковая кобра"),
+            ("Сколько примерно видов змей существует в мире?", json.dumps(["Около 1000", "Около 2000", "Около 3500", "Более 5000"]), "Около 3500"),
+            ("Какая из этих змей не ядовита?", json.dumps(["Молочная змея", "Коралловый аспид", "Тайпан", "Морская змея"]), "Молочная змея"),
+            ("Какую скорость может развить Черная мамба?", json.dumps(["До 5 км/ч", "До 10 км/ч", "До 20 км/ч", "До 30 км/ч"]), "До 20 км/ч"),
+            ("Что из этого НЕ едят змеи?", json.dumps(["Птиц", "Яйца", "Рыбу", "Траву"]), "Траву"),
+            ("Какая змея известна своим 'капюшоном'?", json.dumps(["Кобра", "Мамба", "Удав", "Питон"]), "Кобра"),
+        ]
+        for q in questions:
+            await db_execute("INSERT INTO quiz_questions (question_text, options, correct_answer) VALUES ($1, $2, $3)", q[0], q[1], q[2])
+        logger.info(f"Добавлено {len(questions)} вопросов в базу данных.")
 
-async def db_execute(query, params=(), fetch=None):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cursor = await conn.execute(query, params)
-        if fetch == 'one':
-            result = await cursor.fetchone()
-        elif fetch == 'all':
-            result = await cursor.fetchall()
-        else:
-            await conn.commit()
-            result = None
-        return result
+# --- Функции для работы с данными (адаптированные под PostgreSQL) ---
 
 async def get_user(user_id: int):
-    return await db_execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetch='one')
+    return await db_execute("SELECT * FROM users WHERE user_id = $1", user_id, fetch='one')
 
 async def add_user(user_id: int, username: str):
+    # ON CONFLICT (user_id) DO NOTHING - аналог INSERT OR IGNORE для PostgreSQL
     await db_execute(
-        "INSERT OR IGNORE INTO users (user_id, username, balance, level) VALUES (?, ?, 0, 0)",
-        (user_id, username)
+        "INSERT INTO users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+        user_id, username
     )
 
 async def update_user_field(user_id: int, field: str, value):
-    await db_execute(f"UPDATE users SET {field} = ? WHERE user_id = ?", (value, user_id))
+    # f-строка здесь безопасна, т.к. `field` - это имя столбца из нашего кода, а не ввод пользователя.
+    await db_execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
 
 async def get_pet(owner_id: int):
-    return await db_execute("SELECT * FROM pets WHERE owner_id = ?", (owner_id,), fetch='one')
+    # Теперь мы можем иметь несколько питомцев, но пока оставим логику на одного.
+    # В будущем можно будет выбирать питомца по ID.
+    return await db_execute("SELECT * FROM pets WHERE owner_id = $1 LIMIT 1", owner_id, fetch='one')
 
 async def create_pet(owner_id: int, name: str, species: str):
     now = int(datetime.now().timestamp())
-    await db_execute("INSERT INTO pets (owner_id, name, species, last_fed, last_watered, last_grown, last_walked, creation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                      (owner_id, name, species, now, now, now, now, now))
+    await db_execute(
+        "INSERT INTO pets (owner_id, name, species, last_fed, last_watered, last_grown, last_walked, creation_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        owner_id, name, species, now, now, now, now, now
+    )
 
 async def update_pet_field(owner_id: int, field: str, value):
-    """Обновляет указанное поле для питомца."""
-    await db_execute(f"UPDATE pets SET {field} = ? WHERE owner_id = ?", (value, owner_id))
+    await db_execute(f"UPDATE pets SET {field} = $1 WHERE owner_id = $2", value, owner_id)
 
 async def delete_pet(owner_id: int):
-    await db_execute("DELETE FROM pets WHERE owner_id = ?", (owner_id,))
+    await db_execute("DELETE FROM pets WHERE owner_id = $1", owner_id)
 
 async def get_user_eggs(owner_id: int):
-    return await db_execute("SELECT * FROM user_eggs WHERE owner_id = ?", (owner_id,), fetch='all')
+    return await db_execute("SELECT * FROM user_eggs WHERE owner_id = $1", owner_id, fetch='all')
 
 async def add_user_egg(owner_id: int, egg_type: str):
-    await db_execute("INSERT INTO user_eggs (owner_id, egg_type) VALUES (?, ?)", (owner_id, egg_type))
+    await db_execute("INSERT INTO user_eggs (owner_id, egg_type) VALUES ($1, $2)", owner_id, egg_type)
 
 async def delete_user_egg(user_egg_id: int):
-    await db_execute("DELETE FROM user_eggs WHERE user_egg_id = ?", (user_egg_id,))
+    await db_execute("DELETE FROM user_eggs WHERE user_egg_id = $1", user_egg_id)
 
 async def get_random_question():
+    # RANDOM() в PostgreSQL работает так же, как в SQLite
     return await db_execute("SELECT * FROM quiz_questions ORDER BY RANDOM() LIMIT 1", fetch='one')
+
+# --- Остальные функции (без изменений в логике) ---
 
 async def get_user_mention_by_id(user_id: int) -> str:
     try:
@@ -235,9 +257,9 @@ async def check_items(user_id: int):
     if not user: return
     now = int(datetime.now().timestamp())
     updates = {}
-    if user["prefix_end"] != 0 and user["prefix_end"] < now: updates["prefix_end"] = 0
-    if user["antitar_end"] != 0 and user["antitar_end"] < now: updates["antitar_end"] = 0
-    if user["vip_end"] != 0 and user["vip_end"] < now: updates["vip_end"] = 0
+    if user["prefix_end"] and user["prefix_end"] < now: updates["prefix_end"] = 0
+    if user["antitar_end"] and user["antitar_end"] < now: updates["antitar_end"] = 0
+    if user["vip_end"] and user["vip_end"] < now: updates["vip_end"] = 0
     for field, value in updates.items(): await update_user_field(user_id, field, value)
 
 async def check_pet_death(owner_id: int):
@@ -258,7 +280,14 @@ async def check_pet_death(owner_id: int):
         logger.error(f"Не удалось отправить сообщение о смерти питомца пользователю {owner_id}: {e}")
     return False
 
-# --- ОБРАБОТЧИКИ КОМАНД ---
+# ... (ВСЕ ОБРАБОТЧИКИ КОМАНД, КОЛЛБЭКОВ И СООБЩЕНИЙ ОСТАЮТСЯ ЗДЕСЬ БЕЗ ИЗМЕНЕНИЙ) ...
+# Я не буду копировать их сюда снова, так как в их ВНУТРЕННЕЙ логике ничего не поменялось.
+# Они просто вызывают обновленные функции для работы с БД.
+# Просто вставьте сюда все ваши хендлеры, начиная с @dp.message(or_f(Command("start", ...)))
+# и заканчивая @dp.message() async def track_user_activity...
+
+# --- НАЧАЛО: СКОПИРУЙТЕ СВОИ ОБРАБОТЧИКИ СЮДА ---
+
 @dp.message(or_f(Command("start", "help", "старт", "помощь"), F.text.lower().in_(['start', 'help', 'старт', 'помощь'])))
 async def cmd_start(message: Message):
     try:
@@ -301,28 +330,32 @@ async def cmd_profile(message: Message):
         user_id = target_user_msg.from_user.id
         username = target_user_msg.from_user.username or target_user_msg.from_user.full_name
 
-        # 🔧 Добавим юзера, если не существует
         await add_user(user_id, username)
         user = await get_user(user_id)
         if not user:
             await message.answer("Профиль не найден и не удалось создать.")
             return
 
-        # 🔧 Заполним нулями пустые поля
-        defaulted = {
-            "balance": 0,
-            "level": 0,
-            "prefix_end": 0,
-            "antitar_end": 0,
-            "vip_end": 0,
-            "partner_id": 0,
+        # Проверка на None и установка значений по умолчанию, если нужно
+        user_data = dict(user)
+        defaults = {
+            "balance": 0, "level": 0, "prefix_end": 0, 
+            "antitar_end": 0, "vip_end": 0, "partner_id": 0
         }
-        for key, default in defaulted.items():
-            if user[key] is None:
-                await update_user_field(user_id, key, default)
+        needs_update = False
+        for key, default in defaults.items():
+            if user_data.get(key) is None:
+                user_data[key] = default
+                needs_update = True
+        
+        if needs_update:
+            for key, value in defaults.items():
+                if user[key] is None:
+                    await update_user_field(user_id, key, value)
+            user = await get_user(user_id) # Перезагружаем данные
 
         await check_items(user_id)
-        user = await get_user(user_id)  # ещё раз после обновлений
+        user = await get_user(user_id)
 
         balance = user["balance"]
         level = user["level"]
@@ -361,6 +394,7 @@ async def cmd_profile(message: Message):
     except Exception as e:
         logger.exception(f"Ошибка в команде /profile: {e}")
         await message.answer("⚠️ Произошла ошибка при получении профиля.")
+
 @dp.message(or_f(Command("hunt", "охота"), F.text.lower().in_(['hunt', 'охота'])))
 async def cmd_hunt(message: Message):
     user_id = message.from_user.id
@@ -498,7 +532,7 @@ async def cmd_take(message: Message, command: CommandObject = None):
             raise ValueError("Неверный формат суммы")
 
         if amount_to_take <= 0:
-             raise ValueError("Сумма должна быть положительной")
+                raise ValueError("Сумма должна быть положительной")
 
         if amount_to_take > target_balance:
             await message.answer(f"Нельзя забрать больше, чем есть у пользователя ({target_balance} 🦎).")
@@ -779,7 +813,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
     if not pet:
         kb = InlineKeyboardBuilder().add(types.InlineKeyboardButton(text="🥚 В магазин яиц", callback_data="go_to_eggshop"))
         text = "У вас еще нет питомца. Загляните в магазин яиц, чтобы завести своего!"
-        if is_callback and message.photo:
+        if is_callback and hasattr(message, 'photo') and message.photo:
             await message.delete()
             await message.answer(text, reply_markup=kb.as_markup())
         elif is_callback:
@@ -875,7 +909,7 @@ async def cb_pet_action(callback: CallbackQuery):
         if now - (pet['last_grown'] or 0) < 24 * 3600:
             await callback.answer("Растить питомца можно только раз в день!", show_alert=True)
             return
-        await db_execute("UPDATE pets SET pet_level = ?, last_grown = ? WHERE owner_id = ?", (pet['pet_level'] + 1, now, user_id))
+        await db_execute("UPDATE pets SET pet_level = $1, last_grown = $2 WHERE owner_id = $3", pet['pet_level'] + 1, now, user_id)
         result_text = f"Вы вырастили своего питомца! Его новый уровень: {pet['pet_level'] + 1}."
     elif action == "feed":
         await update_pet_field(user_id, "last_fed", now)
@@ -1013,7 +1047,7 @@ async def successful_payment_handler(message: Message):
         current_balance = user['balance'] or 0
         new_balance = current_balance + lizards_to_add
         await update_user_field(user_id, 'balance', new_balance)
-        await bot.send_message(chat_id=user_id, text=f"✅ Оплата прошла успешно!\n\nВам начислено: {lizards_to_add} 🦎\nВаш новый баланс: {new_balance} �")
+        await bot.send_message(chat_id=user_id, text=f"✅ Оплата прошла успешно!\n\nВам начислено: {lizards_to_add} 🦎\nВаш новый баланс: {new_balance} 🦎")
     except Exception as e:
         logger.error(f"Error in successful_payment_handler: {e}")
         await bot.send_message(chat_id=message.from_user.id, text="Произошла ошибка при начислении ящерок. Пожалуйста, свяжитесь с администратором.")
@@ -1190,14 +1224,24 @@ async def track_user_activity(message: types.Message):
             recent_users_activity.setdefault(message.chat.id, {})
             recent_users_activity[message.chat.id][message.from_user.id] = datetime.now().timestamp()
 
+# --- КОНЕЦ: СКОПИРУЙТЕ СВОИ ОБРАБОТЧИКИ СЮДА ---
+
+
 # --- ЗАПУСК БОТА ---
 async def main():
+    global db_pool
+    await create_pool()
     await init_db()
     await populate_questions()
+    
     bot.default_parse_mode = "HTML"
+    
     try:
         await dp.start_polling(bot)
     finally:
+        if db_pool:
+            await db_pool.close()
+            logger.info("Пул соединений с PostgreSQL закрыт.")
         await bot.session.close()
 
 if __name__ == "__main__":
