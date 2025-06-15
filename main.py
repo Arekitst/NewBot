@@ -1332,12 +1332,14 @@ async def cmd_ping(message: Message):
 
 
 # --- ЗАПУСК БОТА ---
+# --- ЗАПУСК БОТА ---
 async def main():
     global db_pool
     await create_pool()
     await init_db()
     await populate_questions()
     
+    # ВОТ ЭТА СТРОКА УСТАНАВЛИВАЕТ HTML КАК СТИЛЬ ПО УМОЛЧАНИЮ
     bot.default_parse_mode = "HTML"
     
     try:
