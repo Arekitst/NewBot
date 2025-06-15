@@ -910,7 +910,7 @@ async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new
         # 4. Отправка сообщений всем получателям
         for chat_id in notification_chat_ids:
             try:
-                await bot.send_message(chat_id, text)
+                await bot.send_message(chat_id, text, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление о покупке в чат {chat_id}: {e}")
 
