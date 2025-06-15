@@ -4,13 +4,14 @@ from datetime import datetime
 import os
 import json
 import asyncio
+import html # <-- Добавлен стандартный модуль Python для безопасной работы с HTML
 
 import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
 from aiogram.utils.markdown import hlink
-from aiogram.utils.html_decoration import quote # <-- ИСПРАВЛЕНО
+# Убраны все проблемные импорты 'quote'
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -247,7 +248,7 @@ async def get_user_display_name(user_id: int, user_record=None) -> str:
         user_record = await get_user(user_id)
     
     if user_record and user_record.get('nickname'):
-        return quote(user_record['nickname'])
+        return html.escape(user_record['nickname'])
     
     try:
         user = await bot.get_chat(user_id)
@@ -281,7 +282,7 @@ async def check_pet_death(owner_id: int):
 
     await delete_pet(owner_id)
     try:
-        await bot.send_message(owner_id, f"💔 Ваш питомец {pet['name']} ({pet['species']}) умер от недостатка ухода...")
+        await bot.send_message(owner_id, f"💔 Ваш питомец {html.escape(pet['name'])} ({html.escape(pet['species'])}) умер от недостатка ухода...")
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение о смерти питомца пользователю {owner_id}: {e}")
     return False
@@ -320,9 +321,6 @@ async def cmd_start(message: Message):
 
 @dp.message(or_f(Command("profile", "профиль"), F.text.lower().in_(['profile', 'профиль'])))
 async def cmd_profile(message: Message):
-    # --- НАЧАЛО БЛОКА ДЛЯ ОТЛАДКИ ---
-    # Этот блок поможет нам точно увидеть ошибку и текст, который ее вызывает.
-    text_to_send = "Произошла ошибка при формировании профиля." # Запасной текст
     try:
         target_user_msg = message.reply_to_message or message
         user_id = target_user_msg.from_user.id
@@ -353,9 +351,9 @@ async def cmd_profile(message: Message):
             partner_status = f"в отношениях с {partner_name}"
 
         profile_owner_display_name = await get_user_display_name(user_id, user)
-        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {quote(target_user_msg.from_user.full_name)}"
+        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {html.escape(target_user_msg.from_user.full_name)}"
 
-        text_to_send = (
+        text = (
             f"{profile_title}:\n\n"
             f"Ник: {profile_owner_display_name}\n"
             f"ID: <code>{user_id}</code>\n\n"
@@ -374,19 +372,10 @@ async def cmd_profile(message: Message):
         kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
         kb.adjust(1)
 
-        await message.answer(text_to_send, reply_markup=kb.as_markup(), parse_mode="HTML")
-    
-    except TelegramBadRequest as e:
-        # ЭТО САМАЯ ВАЖНАЯ ЧАСТЬ: если Telegram не смог обработать HTML, мы увидим ошибку и сам текст
-        logger.error(f"!!! ОШИБКА ФОРМАТИРОВАНИЯ В CMD_PROFILE !!!")
-        logger.error(f"Сообщение от Telegram API: {e}")
-        logger.error(f"Текст, который не удалось отправить:\n---\n{text_to_send}\n---")
-        await message.answer("⚠️ Произошла внутренняя ошибка при отображении профиля. Администратор уже уведомлен (в логах).")
-
+        await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except Exception as e:
-        logger.exception(f"Неизвестная ошибка в команде /profile: {e}")
-        await message.answer("⚠️ Произошла неизвестная ошибка при получении профиля.")
-    # --- КОНЕЦ БЛОКА ДЛЯ ОТЛАДКИ ---
+        logger.exception(f"Ошибка в команде /profile: {e}")
+        await message.answer("⚠️ Произошла ошибка при получении профиля.")
 
 @dp.message(or_f(Command("setnick", "ник"), F.text.lower().startswith(('ник ', 'setnick '))))
 async def cmd_setnick(message: Message, command: CommandObject):
@@ -402,7 +391,7 @@ async def cmd_setnick(message: Message, command: CommandObject):
         
     user_id = message.from_user.id
     await update_user_field(user_id, "nickname", nickname)
-    await message.reply(f"✅ Ваш ник успешно изменен на: <b>{quote(nickname)}</b>", parse_mode="HTML")
+    await message.reply(f"✅ Ваш ник успешно изменен на: <b>{html.escape(nickname)}</b>", parse_mode="HTML")
 
 @dp.message(or_f(Command("delnick", "удалитьник"), F.text.lower().in_(['delnick', 'удалитьник'])))
 async def cmd_delnick(message: Message):
@@ -1003,7 +992,7 @@ async def process_pet_name_after_hatch(message: Message, state: FSMContext):
     await create_pet(message.from_user.id, pet_name, hatched_species_name)
     await state.clear()
     
-    await message.answer(f"🎉 Из яйца вылупился <b>{quote(hatched_species_name)}</b>!\nВы назвали его <b>{quote(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.", parse_mode="HTML")
+    await message.answer(f"🎉 Из яйца вылупился <b>{html.escape(hatched_species_name)}</b>!\nВы назвали его <b>{html.escape(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.", parse_mode="HTML")
 
 @dp.message(or_f(Command("mypet", "мойпитомец"), F.text.lower().in_(['mypet', 'мойпитомец'])))
 async def cmd_mypet(message: Message):
@@ -1043,7 +1032,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         return dt_obj.strftime('%d.%m %H:%M')
 
     caption = (
-        f"🐾 <b>Питомец: {quote(pet['name'])}</b> ({quote(pet_species)})\n\n"
+        f"🐾 <b>Питомец: {html.escape(pet['name'])}</b> ({html.escape(pet_species)})\n\n"
         f"Уровень: {pet_level}\n"
         f"Корм: {format_time_since(pet.get('last_fed', 0))}\n"
     )
@@ -1463,7 +1452,7 @@ async def cmd_ping(message: Message):
         target_mentions = [await get_user_display_name(uid) for uid in target_ids]
         mentions_str = ", ".join(target_mentions)
         
-        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{quote(ping_text)}»", disable_notification=False, parse_mode="HTML")
+        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{html.escape(ping_text)}»", disable_notification=False, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in ping command while getting user mentions: {e}")
         await message.reply("Не удалось выбрать пользователя для пинга.")
@@ -1488,6 +1477,8 @@ async def main():
     await create_pool()
     await init_db()
     await populate_questions()
+    
+    # Убрана строка bot.default_parse_mode = "HTML"
     
     try:
         await dp.start_polling(bot)
