@@ -836,6 +836,99 @@ async def cmd_give(message: Message, command: CommandObject = None):
     await update_user_field(target_id, "balance", new_balance)
     await message.answer(f"✅ Выдали {amount} 🦎 пользователю с ID {target_id}. Новый баланс: {new_balance} 🦎")
 
+# --- АДМИН-КОМАНДЫ ---
+# Вставьте эту функцию после других админ-команд, например, после cmd_giveegg
+
+@dp.message(Command("adminprofile", "админпрофиль"))
+async def cmd_adminprofile(message: Message, command: CommandObject = None):
+    # 1. Проверка, является ли пользователь администратором
+    if message.from_user.id not in ADMIN_IDS:
+        return # Молча игнорируем, если вызвал не админ
+
+    # 2. Определяем ID целевого пользователя
+    target_id = None
+    target_user_info = None # Для получения имени, если есть
+    
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        target_user_info = message.reply_to_message.from_user
+    elif command and command.args:
+        try:
+            target_id = int(command.args)
+        except (ValueError, TypeError):
+            await message.reply("❗️ Неверный формат ID. Укажите ID пользователя или ответьте на его сообщение.")
+            return
+    
+    if not target_id:
+        await message.reply("ℹ️ **Использование:**\n`/adminprofile <user_id>`\n*или*\nОтветьте на сообщение пользователя командой `/adminprofile`.")
+        return
+
+    # 3. Получаем данные пользователя из БД
+    user = await get_user(target_id)
+    if not user:
+        await message.reply(f"❌ Пользователь с ID `{target_id}` не найден в базе данных.")
+        return
+
+    # 4. Собираем полный профиль, ИГНОРИРУЯ настройки приватности
+    balance_str = str(user.get("balance", 0))
+    level_str = str(user.get("level", 0))
+    
+    now = int(datetime.now().timestamp())
+    def format_item(end_timestamp):
+        if end_timestamp and end_timestamp > now:
+            dt = datetime.fromtimestamp(end_timestamp)
+            return f"активен до {dt.strftime('%d.%m.%Y %H:%M')}"
+        return "отсутствует"
+
+    partner_status = "в активном поиске"
+    if user.get("partner_id"):
+        partner_name = await get_user_display_name(user['partner_id'])
+        partner_status = f"в отношениях с {partner_name}"
+
+    # Пытаемся получить актуальное имя пользователя
+    try:
+        if not target_user_info:
+            target_user_info = await bot.get_chat(target_id)
+        display_name = hlink(target_user_info.full_name, f"tg://user?id={target_id}")
+    except Exception:
+        display_name = f"Пользователь (ID: {target_id})"
+
+
+    profile_text = (
+        f"👑 <b>Админ-профиль пользователя</b> {display_name}\n\n"
+        f"Ник в боте: {html.escape(user.get('nickname', 'не установлен'))}\n"
+        f"ID: <code>{target_id}</code>\n\n"
+        f"<b>Реальные данные (без скрытия):</b>\n"
+        f"Уровень: {level_str} 🐍\n"
+        f"Баланс: {balance_str} 🦎\n\n"
+        f"Статус: {partner_status}\n\n"
+        f"<b>Улучшения:</b>\n"
+        f"Префикс: {format_item(user.get('prefix_end'))}\n"
+        f"Антитар: {format_item(user.get('antitar_end'))}\n"
+        f"VIP: {format_item(user.get('vip_end'))}"
+    )
+
+    # 5. Отправляем результат в ЛС администратору
+    try:
+        await bot.send_message(
+            chat_id=message.from_user.id, # ID администратора
+            text=profile_text,
+            parse_mode="HTML"
+        )
+        # Сообщаем об успехе в чате, где была вызвана команда
+        if message.chat.type != 'private':
+            await message.reply("✅ Профиль пользователя отправлен вам в личные сообщения.")
+            
+    except TelegramBadRequest as e:
+        # Эта ошибка возникает, если админ никогда не писал боту в ЛС или заблокировал его
+        if "chat not found" in str(e) or "bot was blocked by the user" in str(e):
+            await message.reply("❗️Не могу отправить вам сообщение. Пожалуйста, начните диалог со мной в ЛС и попробуйте снова.")
+        else:
+            logger.error(f"Ошибка при отправке админ-профиля в ЛС: {e}")
+            await message.reply("❌ Произошла непредвиденная ошибка при отправке профиля.")
+
+
+
 @dp.message(or_f(Command("take", "забрать"), F.text.lower().startswith(('take ', 'забрать '))))
 async def cmd_take(message: Message, command: CommandObject = None):
     if message.from_user.id not in ADMIN_IDS:
