@@ -9,6 +9,7 @@ import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
+from aiogram.utils.markdown import hlink, quote # <-- Добавлены утилиты для безопасного HTML
 
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -238,15 +239,21 @@ async def get_random_question():
 # --- Вспомогательные функции ---
 
 async def get_user_display_name(user_id: int, user_record=None) -> str:
+    """
+    Возвращает HTML-безопасный никнейм пользователя, если он есть, 
+    иначе - кликабельное HTML-упоминание.
+    """
     if not user_record:
         user_record = await get_user(user_id)
     
     if user_record and user_record.get('nickname'):
-        return user_record['nickname']
+        # Экранируем ник, чтобы избежать проблем с HTML-разметкой
+        return quote(user_record['nickname'])
     
     try:
         user = await bot.get_chat(user_id)
-        return f'<a href="tg://user?id={user.id}">{user.full_name}</a>'
+        # hlink автоматически экранирует имя пользователя
+        return hlink(user.full_name, f"tg://user?id={user.id}")
     except TelegramBadRequest:
         return f"Пользователь (ID: {user_id})"
     except Exception as e:
@@ -291,8 +298,8 @@ async def cmd_start(message: Message):
     
     if message.chat.type == 'private':
         tutorial_text = (
-            "👋 **Приветствуем в змеином боте!**\n\n"
-            "**Основные команды:**\n"
+            "👋 <b>Приветствуем в змеином боте!</b>\n\n"
+            "<b>Основные команды:</b>\n"
             "▫️ `/profile` / `профиль` — ваш профиль.\n"
             "▫️ `/setnick [имя]` / `/ник [имя]` — установить ник.\n"
             "▫️ `/delnick` / `/удалитьник` — удалить ник.\n"
@@ -300,7 +307,7 @@ async def cmd_start(message: Message):
             "▫️ `/pay` / `перевод` (в ответ) — перевести ящерок.\n"
             "▫️ `/shop` / `магазин` — купить улучшения.\n"
             "▫️ `/topup` / `пополнить` — пополнить баланс.\n\n"
-            "**Игровые механики:**\n"
+            "<b>Игровые механики:</b>\n"
             "🐍 `/quiz` / `викторина` — пройти викторину.\n"
             "🎰 `/casino [ставка]` / `/казино [ставка]` — сыграть в казино.\n"
             "🎲 `/dice [ставка]` / `/кости [ставка]` — игра в кости с другим игроком.\n"
@@ -345,7 +352,7 @@ async def cmd_profile(message: Message):
             partner_status = f"в отношениях с {partner_name}"
 
         profile_owner_display_name = await get_user_display_name(user_id, user)
-        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {target_user_msg.from_user.full_name}"
+        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {quote(target_user_msg.from_user.full_name)}"
 
         text = (
             f"{profile_title}:\n\n"
@@ -385,7 +392,7 @@ async def cmd_setnick(message: Message, command: CommandObject):
         
     user_id = message.from_user.id
     await update_user_field(user_id, "nickname", nickname)
-    await message.reply(f"✅ Ваш ник успешно изменен на: **{nickname}**")
+    await message.reply(f"✅ Ваш ник успешно изменен на: <b>{quote(nickname)}</b>")
 
 @dp.message(or_f(Command("delnick", "удалитьник"), F.text.lower().in_(['delnick', 'удалитьник'])))
 async def cmd_delnick(message: Message):
@@ -421,13 +428,13 @@ async def cmd_pay(message: Message, command: CommandObject = None):
         return
 
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot or message.reply_to_message.from_user.id == message.from_user.id:
-        await message.reply("❗️ **Ошибка:**\nИспользуйте эту команду в ответ на сообщение другого пользователя.")
+        await message.reply("❗️ <b>Ошибка:</b>\nИспользуйте эту команду в ответ на сообщение другого пользователя.")
         return
     
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if args is None:
-        await message.reply("❗️ **Ошибка:**\nУкажите сумму для перевода. Пример: `перевод 50`")
+        await message.reply("❗️ <b>Ошибка:</b>\nУкажите сумму для перевода. Пример: `перевод 50`")
         return
 
     try:
@@ -435,7 +442,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
         if amount <= 0:
             raise ValueError
     except (TypeError, ValueError):
-        await message.reply("❗️ **Ошибка:**\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`")
+        await message.reply("❗️ <b>Ошибка:</b>\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`")
         return
         
     sender = message.from_user
@@ -447,7 +454,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     
     sender_balance = sender_data['balance'] or 0
     if sender_balance < amount:
-        await message.reply(f"❌ **Недостаточно средств!**\nУ вас на балансе всего {sender_balance} 🦎.")
+        await message.reply(f"❌ <b>Недостаточно средств!</b>\nУ вас на балансе всего {sender_balance} 🦎.")
         return
         
     recipient_data = await get_user(recipient.id)
@@ -457,7 +464,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     
     sender_mention = await get_user_display_name(sender.id)
     recipient_mention = await get_user_display_name(recipient.id)
-    await message.answer(f"💸 **Перевод успешен!**\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.")
+    await message.answer(f"💸 <b>Перевод успешен!</b>\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.")
 
 # --- ИГРОВЫЕ МЕХАНИКИ ---
 
@@ -537,15 +544,15 @@ async def cb_casino_play(callback: CallbackQuery):
         final_balance = new_balance + winnings
         await update_user_field(player_id, "balance", final_balance)
         result_text = (
-            f"🎉 **Поздравляем, вы выиграли!**\n"
+            f"🎉 <b>Поздравляем, вы выиграли!</b>\n"
             f"Выпало: {winning_symbol} {winning_color.capitalize()}\n"
-            f"Ваш выигрыш: **{winnings}** 🦎\n"
+            f"Ваш выигрыш: <b>{winnings}</b> 🦎\n"
             f"Новый баланс: {final_balance} 🦎"
         )
     else:
         final_balance = new_balance
         result_text = (
-            f"😔 **Увы, вы проиграли.**\n"
+            f"😔 <b>Увы, вы проиграли.</b>\n"
             f"Выпало: {winning_symbol} {winning_color.capitalize()}\n"
             f"Ваша ставка: {bet} 🦎\n"
             f"Ваш баланс: {final_balance} 🦎"
@@ -587,8 +594,8 @@ async def cmd_dice(message: Message, command: CommandObject):
 
     host_name = await get_user_display_name(host_id, host_data)
     await message.answer(
-        f"🎲 **Игра в кости!**\n\n"
-        f"Игрок {host_name} ставит **{bet}** 🦎.\n"
+        f"🎲 <b>Игра в кости!</b>\n\n"
+        f"Игрок {host_name} ставит <b>{bet}</b> 🦎.\n"
         f"Кто готов принять вызов?",
         reply_markup=kb.as_markup()
     )
@@ -634,7 +641,7 @@ async def cb_dice_accept(callback: CallbackQuery):
     
     await asyncio.sleep(4)
 
-    await game_message.edit_text(f"🎲 {host_name} выбросил(а): **{host_value}**\n"
+    await game_message.edit_text(f"🎲 {host_name} выбросил(а): <b>{host_value}</b>\n"
                                  f"🎲 {challenger_name} бросает кость...")
     challenger_roll_msg = await bot.send_dice(callback.message.chat.id)
     challenger_value = challenger_roll_msg.dice.value
@@ -642,9 +649,9 @@ async def cb_dice_accept(callback: CallbackQuery):
     await asyncio.sleep(4)
 
     final_text = (
-        f"**Результаты игры:**\n"
-        f"› {host_name}: **{host_value}**\n"
-        f"› {challenger_name}: **{challenger_value}**\n\n"
+        f"<b>Результаты игры:</b>\n"
+        f"› {host_name}: <b>{host_value}</b>\n"
+        f"› {challenger_name}: <b>{challenger_value}</b>\n\n"
     )
 
     if host_value > challenger_value:
@@ -652,13 +659,13 @@ async def cb_dice_accept(callback: CallbackQuery):
         new_challenger_balance = challenger_balance - bet
         await update_user_field(host_id, 'balance', new_host_balance)
         await update_user_field(challenger_id, 'balance', new_challenger_balance)
-        final_text += f"🏆 Победитель: {host_name}! Он(а) выигрывает **{bet*2}** 🦎."
+        final_text += f"🏆 Победитель: {host_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
     elif challenger_value > host_value:
         new_host_balance = host_data.get('balance', 0) - bet
         new_challenger_balance = challenger_balance + bet
         await update_user_field(host_id, 'balance', new_host_balance)
         await update_user_field(challenger_id, 'balance', new_challenger_balance)
-        final_text += f"🏆 Победитель: {challenger_name}! Он(а) выигрывает **{bet*2}** 🦎."
+        final_text += f"🏆 Победитель: {challenger_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
     else:
         final_text += "🤝 Ничья! Ставки возвращены игрокам."
 
@@ -858,7 +865,7 @@ async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: 
         kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz_answer:{option}"))
     kb.adjust(1)
     
-    text = f"🐍 **Вопрос викторины:**\n\n{question_data['question_text']}"
+    text = f"🐍 <b>Вопрос викторины:</b>\n\n{question_data['question_text']}"
     try:
         if is_callback:
             await message.edit_text(text, reply_markup=kb.as_markup())
@@ -882,10 +889,10 @@ async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
 
     if user_answer == correct_answer:
         new_level = current_level + 1
-        result_text = f"✅ **Правильно!**\n\nВаш уровень повышен: {current_level} ➡️ {new_level}"
+        result_text = f"✅ <b>Правильно!</b>\n\nВаш уровень повышен: {current_level} ➡️ {new_level}"
     else:
         new_level = max(0, current_level - 1)
-        result_text = f"❌ **Неверно!** Правильный ответ: {correct_answer}\n\nВаш уровень понижен: {current_level} ➡️ {new_level}"
+        result_text = f"❌ <b>Неверно!</b> Правильный ответ: {correct_answer}\n\nВаш уровень понижен: {current_level} ➡️ {new_level}"
 
     await update_user_field(callback.from_user.id, 'level', new_level)
     await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
@@ -897,7 +904,7 @@ async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
 # --- СИСТЕМА ПИТОМЦЕВ ---
 @dp.message(or_f(Command("eggshop", "магазиняиц"), F.text.lower().in_(['eggshop', 'магазиняиц'])))
 async def cmd_eggshop(message: Message):
-    text = "🥚 **Магазин яиц** 🥚\n\nВыберите яйцо, чтобы приобрести его:"
+    text = "🥚 <b>Магазин яиц</b> 🥚\n\nВыберите яйцо, чтобы приобрести его:"
     kb = InlineKeyboardBuilder()
     for egg_type, data in EGGS.items():
         kb.add(types.InlineKeyboardButton(text=f"{data['name']} ({data['cost']} 🦎)", callback_data=f"buy_egg:{egg_type}"))
@@ -931,7 +938,7 @@ async def cmd_myeggs(message: Message):
     if not user_eggs:
         return await message.answer("У вас нет купленных яиц. Загляните в /eggshop или магазин яиц!")
         
-    text = "🧺 **Ваши яйца** 🧺\n\nНажмите на кнопку, чтобы вылупить питомца:"
+    text = "🧺 <b>Ваши яйца</b> 🧺\n\nНажмите на кнопку, чтобы вылупить питомца:"
     kb = InlineKeyboardBuilder()
     for egg in user_eggs:
         egg_data = EGGS.get(egg['egg_type'])
@@ -985,7 +992,7 @@ async def process_pet_name_after_hatch(message: Message, state: FSMContext):
     await create_pet(message.from_user.id, pet_name, hatched_species_name)
     await state.clear()
     
-    await message.answer(f"🎉 Из яйца вылупился **{hatched_species_name}**!\nВы назвали его **{pet_name}**.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.")
+    await message.answer(f"🎉 Из яйца вылупился <b>{quote(hatched_species_name)}</b>!\nВы назвали его <b>{quote(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.")
 
 @dp.message(or_f(Command("mypet", "мойпитомец"), F.text.lower().in_(['mypet', 'мойпитомец'])))
 async def cmd_mypet(message: Message):
@@ -1025,7 +1032,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         return dt_obj.strftime('%d.%m %H:%M')
 
     caption = (
-        f"🐾 <b>Питомец: {pet['name']}</b> ({pet_species})\n\n"
+        f"🐾 <b>Питомец: {quote(pet['name'])}</b> ({quote(pet_species)})\n\n"
         f"Уровень: {pet_level}\n"
         f"Корм: {format_time_since(pet.get('last_fed', 0))}\n"
     )
@@ -1094,7 +1101,7 @@ async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new
 
         for chat_id in notification_chat_ids:
             try:
-                await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+                await bot.send_message(chat_id, text)
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление о покупке в чат {chat_id}: {e}")
     except Exception as e:
@@ -1238,7 +1245,7 @@ async def cb_buy_item(callback: CallbackQuery):
 # --- СИСТЕМА ПОПОЛНЕНИЯ ЧЕРЕЗ TELEGRAM STARS ---
 @dp.message(or_f(Command("topup", "пополнить"), F.text.lower().in_(['topup', 'пополнить'])))
 async def cmd_topup(message: Message, state: FSMContext):
-    await message.answer("Введите количество ящерок, которое вы хотите купить.\n\n▫️ **Курс:** 3 ящерки = 1 ★\n▫️ **Лимиты:** от 20 до 10 000 ящерок за раз.\n▫️ Количество должно быть кратно 3.\n\nДля отмены просто напишите /cancel или отмена.")
+    await message.answer("Введите количество ящерок, которое вы хотите купить.\n\n▫️ <b>Курс:</b> 3 ящерки = 1 ★\n▫️ <b>Лимиты:</b> от 20 до 10 000 ящерок за раз.\n▫️ Количество должно быть кратно 3.\n\nДля отмены просто напишите /cancel или отмена.")
     await state.set_state(TopupStates.waiting_for_amount)
 
 @dp.message(or_f(Command("cancel", "отмена"), F.text.lower().in_(['cancel', 'отмена'])), F.state == TopupStates.waiting_for_amount)
@@ -1445,7 +1452,7 @@ async def cmd_ping(message: Message):
         target_mentions = [await get_user_display_name(uid) for uid in target_ids]
         mentions_str = ", ".join(target_mentions)
         
-        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{ping_text}»", disable_notification=False)
+        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{quote(ping_text)}»", disable_notification=False)
     except Exception as e:
         logger.error(f"Error in ping command while getting user mentions: {e}")
         await message.reply("Не удалось выбрать пользователя для пинга.")
