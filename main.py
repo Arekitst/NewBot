@@ -5,11 +5,11 @@ import os
 import json
 import asyncio
 
-import asyncpg
+import asyncpg  # <-- НОВАЯ БИБЛИОТЕКА
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
-from aiogram.enums import ChatMemberStatus, ParseMode
+from aiogram.enums import ChatMemberStatus
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # --- НАСТРОЙКИ БОТА (ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ) ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DB_URL")
+DATABASE_URL = os.getenv("DB_URL") # <-- НОВАЯ ПЕРЕМЕННАЯ ДЛЯ SUPABASE
 
 if not BOT_TOKEN or not DATABASE_URL:
     logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменные окружения BOT_TOKEN и/или DB_URL не установлены.")
@@ -29,20 +29,151 @@ if not BOT_TOKEN or not DATABASE_URL:
 
 ADMIN_IDS = [6179115044, 7189733067]
 
-# --- СПИСОК ВОПРОСОВ ДЛЯ ВИКТОРИНЫ ---
-QUIZ_QUESTIONS = [
-    ("Какая змея считается самой ядовитой в мире?", json.dumps(["Тайпан", "Черная мамба", "Гадюка", "Кобра"]), "Тайпан"),
-    ("Какая змея самая большая в мире?", json.dumps(["Анаконда", "Сетчатый питон", "Королевская кобра", "Тигровый питон"]), "Сетчатый питон"),
-    ("Есть ли у змей уши?", json.dumps(["Да, но они скрыты", "Только внутреннее ухо", "Нет", "Да, как у ящериц"]), "Только внутреннее ухо"),
-    ("Какая змея откладывает самые большие яйца?", json.dumps(["Питон", "Анаконда", "Королевская кобра", "Удав"]), "Королевская кобра"),
-    ("Что помогает змеям 'нюхать' языком?", json.dumps(["Орган Якобсона", "Ноздри", "Терморецепторы", "Кончик языка"]), "Орган Якобсона"),
-    ("Как называется процесс сбрасывания кожи у змей?", json.dumps(["Линька", "Метаморфоза", "Регенерация", "Анабиоз"]), "Линька"),
-    ("Какая змея способна 'плеваться' ядом?", json.dumps(["Ошейниковая кобра", "Гадюка Рассела", "Бушмейстер", "Эфа"]), "Ошейниковая кобра"),
-    ("Сколько примерно видов змей существует в мире?", json.dumps(["Около 1000", "Около 2000", "Около 3500", "Более 5000"]), "Около 3500"),
-    ("Какая из этих змей не ядовита?", json.dumps(["Молочная змея", "Коралловый аспид", "Тайпан", "Морская змея"]), "Молочная змея"),
-    ("Какую скорость может развить Черная мамба?", json.dumps(["До 5 км/ч", "До 10 км/ч", "До 20 км/ч", "До 30 км/ч"]), "До 20 км/ч"),
-    ("Что из этого НЕ едят змеи?", json.dumps(["Птиц", "Яйца", "Рыбу", "Траву"]), "Траву"),
-    ("Какая змея известна своим 'капюшоном'?", json.dumps(["Кобра", "Мамба", "Удав", "Питон"]), "Кобра"),
+# --- НАСТРОЙКИ ИГРОВОЙ ЛОГИКИ (без изменений) ---
+MAX_PETS = 20
+QUIZ_COOLDOWN_HOURS = 5
+MARRIAGE_MIN_LEVEL = 35
+PET_MIN_LEVEL = 55
+MARRIAGE_COST = 250
+PET_DEATH_DAYS = 2
+
+PET_ACTIONS_COST = {
+    "feed": 1, "grow": 5, "water": 2, "walk": 3,
+}
+
+EGGS = {
+    "common": {"name": "🥚 Обычное яйцо", "cost": 150, "rarity": "common"},
+    "rare": {"name": "💎 Редкое яйцо", "cost": 500, "rarity": "rare"},
+    "legendary": {"name": "⚜️ Легендарное яйцо", "cost": 1500, "rarity": "legendary"},
+    "mythic": {"name": "✨ Мифическое яйцо", "cost": 5000, "rarity": "mythic"},
+}
+
+PET_SPECIES = {
+    "common": [
+        {"species_name": "Полоз", "images": {1: "https://i.ibb.co/4gRJSF4N/Gemini-Generated-Image-bbrjqrbbrjqrbbrj.png", 10: "https://i.ibb.co/x87LKPq2/image.png", 35: "https://i.ibb.co/ccnTcgJX/image.png"}},
+        {"species_name": "Уж", "images": {1: "https://i.ibb.co/qLBW0wN7/image.png", 10: "https://i.ibb.co/Z1fRyG8R/image.png", 35: "https://i.ibb.co/Ng6pJ2wm/Gemini-Generated-Image-6z8b4s6z8b4s6z8b.png"}},
+    ],
+    "rare": [
+        {"species_name": "Гадюка", "images": {1: "https://i.ibb.co/xSXPC1C7/image.png", 10: "https://i.ibb.co/Y4KqkSgt/image.png", 35: "https://i.ibb.co/rRhY1nX3/image.png"}},
+        {"species_name": "Эфа", "images": {1: "https://i.ibb.co/TDnDKDJb/image.png", 10: "https://i.ibb.co/XfhfSP31/image.png", 35: "https://i.ibb.co/prvbR5Kf/image.png"}},
+    ],
+    "legendary": [
+        {"species_name": "Питон", "images": {1: "https://i.ibb.co/WCXKKBF/image.png", 10: "https://i.ibb.co/j9Q9XZTR/image.png", 35: "https://i.ibb.co/qYjVcqck/Gemini-Generated-Image-aofhgzaofhgzaofh.png"}},
+        {"species_name": "Кобра", "images": {1: "https://i.ibb.co/DP5QFyJn/Gemini-Generated-Image-gzt9g3gzt9g3gzt9.png", 10: "https://i.ibb.co/HLS6vB21/Gemini-Generated-Image-m2l12m2l12m2l12m.png", 35: "https://i.ibb.co/7xdG7Vmg/Gemini-Generated-Image-pcfv7cpcfv7cpcfv.png"}},
+    ],
+    "mythic": [
+        {"species_name": "Василиск", "images": {1: "https://i.ibb.co/0Rtx5sb1/Gemini-Generated-Image-rxh7a8rxh7a8rxh7.png", 10: "https://i.ibb.co/RpBs3XxM/Gemini-Generated-Image-togzv2togzv2togz.png", 35: "https://i.ibb.co/FLCVtdVg/Gemini-Generated-Image-bfub33bfub33bfub.png"}},
+    ]
+}
+
+PING_MESSAGES = [ "чем занимаешься?", "заходи на игру?", "как насчет катки?", "го общаться!", "скучно, давай поговорим?"]
+recent_users_activity = {}
+
+# --- ИНИЦИАЛИЗАЦИЯ ---
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+db_pool = None # <-- Пул соединений с БД
+
+# --- FSM СОСТОЯНИЯ (без изменений) ---
+class TopupStates(StatesGroup):
+    waiting_for_amount = State()
+
+class QuizStates(StatesGroup):
+    in_quiz = State()
+
+class PetHatchStates(StatesGroup):
+    waiting_for_name = State()
+
+
+# --- РАБОТА С БАЗОЙ ДАННЫХ (POSTGRESQL / ASYNCPG) ---
+
+async def create_pool():
+    """Создает пул соединений с базой данных."""
+    global db_pool
+    try:
+        db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
+        logger.info("Пул соединений с PostgreSQL успешно создан.")
+    except Exception as e:
+        logger.critical(f"Не удалось подключиться к PostgreSQL: {e}")
+        exit()
+
+async def db_execute(query, *params, fetch=None):
+    """
+    Выполняет SQL-запрос с использованием пула соединений.
+    :param query: SQL-запрос с плейсхолдерами $1, $2, ...
+    :param params: Параметры для запроса.
+    :param fetch: 'one' для получения одной записи, 'all' для всех, None для выполнения без возврата.
+    :return: Результат запроса или None.
+    """
+    global db_pool
+    if not db_pool:
+        logger.error("Пул соединений не инициализирован!")
+        return None
+        
+    async with db_pool.acquire() as connection:
+        try:
+            if fetch == 'one':
+                return await connection.fetchrow(query, *params)
+            elif fetch == 'all':
+                return await connection.fetch(query, *params)
+            else:
+                await connection.execute(query, *params)
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка выполнения SQL-запроса: {query} с параметрами {params}. Ошибка: {e}")
+            return None
+
+async def init_db():
+    """Инициализирует таблицы в базе данных, если их не существует."""
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            balance BIGINT DEFAULT 0,
+            level INTEGER DEFAULT 0,
+            last_hunt BIGINT DEFAULT 0,
+            last_quiz BIGINT DEFAULT 0,
+            partner_id BIGINT DEFAULT 0,
+            proposal_from_id BIGINT DEFAULT 0,
+            prefix_end BIGINT DEFAULT 0,
+            antitar_end BIGINT DEFAULT 0,
+            vip_end BIGINT DEFAULT 0,
+            quiz_highscore INTEGER DEFAULT 0 -- Новая колонка
+        );
+    """)
+    # Безопасно добавляем колонку, если ее нет, для существующих баз
+    try:
+        await db_execute("ALTER TABLE users ADD COLUMN quiz_highscore INTEGER DEFAULT 0;")
+    except asyncpg.exceptions.DuplicateColumnError:
+        pass # Колонка уже существует, все в порядке
+    
+    # Остальные таблицы без изменений
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS pets (
+            pet_id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, name TEXT,
+            species TEXT, pet_level INTEGER DEFAULT 1, last_fed BIGINT DEFAULT 0,
+            last_watered BIGINT DEFAULT 0, last_grown BIGINT DEFAULT 0,
+            last_walked BIGINT DEFAULT 0, creation_date BIGINT
+        );
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS user_eggs (
+            user_egg_id SERIAL PRIMARY KEY, owner_id BIGINT, egg_type TEXT
+        );
+    """)
+    await db_execute("""
+        CREATE TABLE IF NOT EXISTS quiz_questions (
+            question_id SERIAL PRIMARY KEY, question_text TEXT NOT NULL,
+            options JSONB NOT NULL, correct_answer TEXT NOT NULL
+        );
+    """)
+    logger.info("Проверка таблиц в БД завершена.")
+
+async def populate_questions():
+    """Заполняет таблицу вопросов, если она пуста."""
+    count_record = await db_execute("SELECT COUNT(*) FROM quiz_questions", fetch='one')
+    if count_record and count_record[0] == 0:
+        NEW_QUESTIONS = [
     ("Какая змея строит гнезда для своих яиц?", json.dumps(["Королевская кобра", "Черная мамба", "Питон", "Анаконда"]), "Королевская кобра"),
     ("Какое чувство у змей развито слабее всего?", json.dumps(["Зрение", "Слух", "Обоняние", "Осязание"]), "Слух"),
     ("Какая змея может 'скользить' по воздуху на расстояние до 100 метров?", json.dumps(["Украшенная древесная змея", "Райская древесная змея", "Летучая змея", "Все ответы верны"]), "Все ответы верны"),
@@ -98,159 +229,30 @@ QUIZ_QUESTIONS = [
     ("Какая змея часто встречается в городских парках и садах Европы?", json.dumps(["Обыкновенный уж", "Медянка", "Гадюка Никольского", "Эскулапов полоз"]), "Обыкновенный уж"),
     ("Что такое 'тепловые ямки' у змей?", json.dumps(["Органы для поиска воды", "Органы инфракрасного зрения", "Места для откладывания яиц", "Углубления для маскировки"]), "Органы инфракрасного зрения")
 ]
+      
+        for q in questions:
+            await db_execute("INSERT INTO quiz_questions (question_text, options, correct_answer) VALUES ($1, $2, $3)", q[0], q[1], q[2])
+        logger.info(f"Добавлено {len(questions)} вопросов в базу данных.")
 
+# --- Функции для работы с данными (адаптированные под PostgreSQL) ---
 
-# --- НАСТРОЙКИ ИГРОВОЙ ЛОГИКИ ---
-MAX_PETS = 20
-QUIZ_COOLDOWN_HOURS = 5
-MARRIAGE_MIN_LEVEL = 35
-PET_MIN_LEVEL = 55
-MARRIAGE_COST = 250
-PET_DEATH_DAYS = 2
-
-PET_ACTIONS_COST = {
-    "feed": 1, "grow": 5, "water": 2, "walk": 3,
-}
-
-EGGS = {
-    "common": {"name": "🥚 Обычное яйцо", "cost": 150, "rarity": "common"},
-    "rare": {"name": "💎 Редкое яйцо", "cost": 500, "rarity": "rare"},
-    "legendary": {"name": "⚜️ Легендарное яйцо", "cost": 1500, "rarity": "legendary"},
-    "mythic": {"name": "✨ Мифическое яйцо", "cost": 5000, "rarity": "mythic"},
-}
-
-PET_SPECIES = {
-    "common": [
-        {"species_name": "Полоз", "images": {1: "https://i.ibb.co/4gRJSF4N/Gemini-Generated-Image-bbrjqrbbrjqrbbrj.png", 10: "https://i.ibb.co/x87LKPq2/image.png", 35: "https://i.ibb.co/ccnTcgJX/image.png"}},
-        {"species_name": "Уж", "images": {1: "https://i.ibb.co/qLBW0wN7/image.png", 10: "https://i.ibb.co/Z1fRyG8R/image.png", 35: "https://i.ibb.co/Ng6pJ2wm/Gemini-Generated-Image-6z8b4s6z8b4s6z8b.png"}},
-    ],
-    "rare": [
-        {"species_name": "Гадюка", "images": {1: "https://i.ibb.co/xSXPC1C7/image.png", 10: "https://i.ibb.co/Y4KqkSgt/image.png", 35: "https://i.ibb.co/rRhY1nX3/image.png"}},
-        {"species_name": "Эфа", "images": {1: "https://i.ibb.co/TDnDKDJb/image.png", 10: "https://i.ibb.co/XfhfSP31/image.png", 35: "https://i.ibb.co/prvbR5Kf/image.png"}},
-    ],
-    "legendary": [
-        {"species_name": "Питон", "images": {1: "https://i.ibb.co/WCXKKBF/image.png", 10: "https://i.ibb.co/j9Q9XZTR/image.png", 35: "https://i.ibb.co/qYjVcqck/Gemini-Generated-Image-aofhgzaofhgzaofh.png"}},
-        {"species_name": "Кобра", "images": {1: "https://i.ibb.co/DP5QFyJn/Gemini-Generated-Image-gzt9g3gzt9g3gzt9.png", 10: "https://i.ibb.co/HLS6vB21/Gemini-Generated-Image-m2l12m2l12m2l12m.png", 35: "https://i.ibb.co/7xdG7Vmg/Gemini-Generated-Image-pcfv7cpcfv7cpcfv.png"}},
-    ],
-    "mythic": [
-        {"species_name": "Василиск", "images": {1: "https://i.ibb.co/0Rtx5sb1/Gemini-Generated-Image-rxh7a8rxh7a8rxh7.png", 10: "https://i.ibb.co/RpBs3XxM/Gemini-Generated-Image-togzv2togzv2togz.png", 35: "https://i.ibb.co/FLCVtdVg/Gemini-Generated-Image-bfub33bfub33bfub.png"}},
-    ]
-}
-
-PING_MESSAGES = [ "чем занимаешься?", "заходи на игру?", "как насчет катки?", "го общаться!", "скучно, давай поговорим?"]
-recent_users_activity = {}
-
-# --- ИНИЦИАЛИЗАЦИЯ ---
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-db_pool = None
-
-# --- FSM СОСТОЯНИЯ ---
-class TopupStates(StatesGroup):
-    waiting_for_amount = State()
-
-class PetHatchStates(StatesGroup):
-    waiting_for_name = State()
-
-class QuizStates(StatesGroup):
-    in_quiz = State()
-
-# --- РАБОТА С БАЗОЙ ДАННЫХ ---
-async def create_pool():
-    global db_pool
-    try:
-        db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
-        logger.info("Пул соединений с PostgreSQL успешно создан.")
-    except Exception as e:
-        logger.critical(f"Не удалось подключиться к PostgreSQL: {e}")
-        exit()
-
-async def db_execute(query, *params, fetch=None):
-    async with db_pool.acquire() as connection:
-        try:
-            if fetch == 'one':
-                return await connection.fetchrow(query, *params)
-            elif fetch == 'all':
-                return await connection.fetch(query, *params)
-            else:
-                await connection.execute(query, *params)
-        except Exception as e:
-            logger.error(f"Ошибка выполнения SQL-запроса: {query} с параметрами {params}. Ошибка: {e}")
-            return None
-
-async def init_db():
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            balance BIGINT DEFAULT 0,
-            level INTEGER DEFAULT 0,
-            last_hunt BIGINT DEFAULT 0,
-            last_quiz BIGINT DEFAULT 0,
-            partner_id BIGINT DEFAULT 0,
-            proposal_from_id BIGINT DEFAULT 0,
-            prefix_end BIGINT DEFAULT 0,
-            antitar_end BIGINT DEFAULT 0,
-            vip_end BIGINT DEFAULT 0,
-            quiz_highscore INTEGER DEFAULT 0
-        );
-    """)
-    # Безопасно добавляем колонку, если ее нет, для существующих баз
-    try:
-        await db_execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS quiz_highscore INTEGER DEFAULT 0;")
-    except Exception as e:
-        logger.info(f"Не удалось добавить колонку 'quiz_highscore' (возможно, уже существует): {e}")
-
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS pets (
-            pet_id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, name TEXT,
-            species TEXT, pet_level INTEGER DEFAULT 1, last_fed BIGINT DEFAULT 0,
-            last_watered BIGINT DEFAULT 0, last_grown BIGINT DEFAULT 0,
-            last_walked BIGINT DEFAULT 0, creation_date BIGINT
-        );
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS user_eggs (
-            user_egg_id SERIAL PRIMARY KEY, owner_id BIGINT, egg_type TEXT
-        );
-    """)
-    await db_execute("""
-        CREATE TABLE IF NOT EXISTS quiz_questions (
-            question_id SERIAL PRIMARY KEY, question_text TEXT NOT NULL,
-            options JSONB NOT NULL, correct_answer TEXT NOT NULL
-        );
-    """)
-    logger.info("Проверка таблиц в БД завершена.")
-
-async def populate_questions():
-    """Заполняет таблицу вопросов из списка QUIZ_QUESTIONS, если их там еще нет."""
-    async with db_pool.acquire() as connection:
-        existing_q_records = await connection.fetch("SELECT question_text FROM quiz_questions")
-        existing_q_texts = {rec['question_text'] for rec in existing_q_records}
-
-        questions_to_add = [q for q in QUIZ_QUESTIONS if q[0] not in existing_q_texts]
-
-        if questions_to_add:
-            await connection.executemany(
-                "INSERT INTO quiz_questions (question_text, options, correct_answer) VALUES ($1, $2, $3)",
-                questions_to_add
-            )
-            logger.info(f"Добавлено {len(questions_to_add)} новых вопросов в базу данных.")
-
-# --- Функции для работы с данными ---
 async def get_user(user_id: int):
     return await db_execute("SELECT * FROM users WHERE user_id = $1", user_id, fetch='one')
 
 async def add_user(user_id: int, username: str):
+    # ON CONFLICT (user_id) DO NOTHING - аналог INSERT OR IGNORE для PostgreSQL
     await db_execute(
         "INSERT INTO users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
         user_id, username
     )
 
 async def update_user_field(user_id: int, field: str, value):
+    # f-строка здесь безопасна, т.к. `field` - это имя столбца из нашего кода, а не ввод пользователя.
     await db_execute(f"UPDATE users SET {field} = $1 WHERE user_id = $2", value, user_id)
 
 async def get_pet(owner_id: int):
+    # Теперь мы можем иметь несколько питомцев, но пока оставим логику на одного.
+    # В будущем можно будет выбирать питомца по ID.
     return await db_execute("SELECT * FROM pets WHERE owner_id = $1 LIMIT 1", owner_id, fetch='one')
 
 async def create_pet(owner_id: int, name: str, species: str):
@@ -275,7 +277,12 @@ async def add_user_egg(owner_id: int, egg_type: str):
 async def delete_user_egg(user_egg_id: int):
     await db_execute("DELETE FROM user_eggs WHERE user_egg_id = $1", user_egg_id)
 
-# --- Вспомогательные функции ---
+async def get_random_question():
+    # RANDOM() в PostgreSQL работает так же, как в SQLite
+    return await db_execute("SELECT * FROM quiz_questions ORDER BY RANDOM() LIMIT 1", fetch='one')
+
+# --- Остальные функции (без изменений в логике) ---
+
 async def get_user_mention_by_id(user_id: int) -> str:
     try:
         user = await bot.get_chat(user_id)
@@ -291,9 +298,9 @@ async def check_items(user_id: int):
     if not user: return
     now = int(datetime.now().timestamp())
     updates = {}
-    if user.get("prefix_end") and user["prefix_end"] < now: updates["prefix_end"] = 0
-    if user.get("antitar_end") and user["antitar_end"] < now: updates["antitar_end"] = 0
-    if user.get("vip_end") and user["vip_end"] < now: updates["vip_end"] = 0
+    if user["prefix_end"] and user["prefix_end"] < now: updates["prefix_end"] = 0
+    if user["antitar_end"] and user["antitar_end"] < now: updates["antitar_end"] = 0
+    if user["vip_end"] and user["vip_end"] < now: updates["vip_end"] = 0
     for field, value in updates.items(): await update_user_field(user_id, field, value)
 
 async def check_pet_death(owner_id: int):
@@ -302,8 +309,8 @@ async def check_pet_death(owner_id: int):
         return True
     now_ts = int(datetime.now().timestamp())
     death_timestamp = now_ts - (PET_DEATH_DAYS * 24 * 3600)
-    last_action_time = max(pet.get('last_fed', 0), pet.get('last_watered', 0), pet.get('last_walked', 0))
-
+    last_action_time = max(pet['last_fed'] or 0, pet['last_watered'] or 0, pet['last_walked'] or 0)
+    
     if last_action_time > death_timestamp:
         return True
 
@@ -314,35 +321,14 @@ async def check_pet_death(owner_id: int):
         logger.error(f"Не удалось отправить сообщение о смерти питомца пользователю {owner_id}: {e}")
     return False
 
-async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new_balance: int, new_end_timestamp: int):
-    try:
-        user_mention = await get_user_mention_by_id(user_id)
-        purchase_time = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
-        end_time = datetime.fromtimestamp(new_end_timestamp).strftime('%d.%m.%Y %H:%M:%S')
+# ... (ВСЕ ОБРАБОТЧИКИ КОМАНД, КОЛЛБЭКОВ И СООБЩЕНИЙ ОСТАЮТСЯ ЗДЕСЬ БЕЗ ИЗМЕНЕНИЙ) ...
+# Я не буду копировать их сюда снова, так как в их ВНУТРЕННЕЙ логике ничего не поменялось.
+# Они просто вызывают обновленные функции для работы с БД.
+# Просто вставьте сюда все ваши хендлеры, начиная с @dp.message(or_f(Command("start", ...)))
+# и заканчивая @dp.message() async def track_user_activity...
 
-        text = (
-            f"🛒 <b>Новая покупка!</b>\n\n"
-            f"👤 <b>Покупатель:</b> {user_mention} (ID: <code>{user_id}</code>)\n"
-            f"🛍️ <b>Товар:</b> {item_name}\n"
-            f"⏳ <b>Срок:</b> {days} дн.\n"
-            f"🦎 <b>Остаток баланса:</b> {new_balance}\n\n"
-            f"🕒 <b>Время покупки:</b> {purchase_time}\n"
-            f"🔚 <b>Окончание подписки:</b> {end_time}"
-        )
+# --- НАЧАЛО: СКОПИРУЙТЕ СВОИ ОБРАБОТЧИКИ СЮДА ---
 
-        target_group_id = -1001863605735
-        notification_chat_ids = set(ADMIN_IDS)
-        notification_chat_ids.add(target_group_id)
-
-        for chat_id in notification_chat_ids:
-            try:
-                await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logger.error(f"Не удалось отправить уведомление о покупке в чат {chat_id}: {e}")
-    except Exception as e:
-        logger.error(f"Критическая ошибка в функции уведомления о покупке: {e}")
-
-# --- ОБРАБОТЧИКИ КОМАНД ---
 @dp.message(or_f(Command("start", "help", "старт", "помощь"), F.text.lower().in_(['start', 'help', 'старт', 'помощь'])))
 async def cmd_start(message: Message):
     try:
@@ -370,7 +356,7 @@ async def cmd_start(message: Message):
                 "💍 `/accept` или `принять` - принять предложение.\n"
                 "💔 `/divorce` или `развод` - разорвать отношения."
             )
-            await message.answer(tutorial_text, parse_mode=None)
+            await message.answer(tutorial_text)
         else:
             await message.answer("🐍 Змеиный бот к вашим услугам! Чтобы посмотреть список команд, напишите мне в личные сообщения.")
 
@@ -391,15 +377,29 @@ async def cmd_profile(message: Message):
             await message.answer("Профиль не найден и не удалось создать.")
             return
 
+        # Проверка на None и установка значений по умолчанию, если нужно
+        user_data = dict(user)
+        defaults = {
+            "balance": 0, "level": 0, "prefix_end": 0, 
+            "antitar_end": 0, "vip_end": 0, "partner_id": 0
+        }
+        needs_update = False
+        for key, default in defaults.items():
+            if user_data.get(key) is None:
+                user_data[key] = default
+                needs_update = True
+        
+        if needs_update:
+            for key, value in defaults.items():
+                if user[key] is None:
+                    await update_user_field(user_id, key, value)
+            user = await get_user(user_id) # Перезагружаем данные
+
         await check_items(user_id)
         user = await get_user(user_id)
 
-        balance = user.get("balance", 0)
-        level = user.get("level", 0)
-        partner_id = user.get("partner_id")
-        prefix_end = user.get("prefix_end")
-        antitar_end = user.get("antitar_end")
-        vip_end = user.get("vip_end")
+        balance = user["balance"]
+        level = user["level"]
 
         now = int(datetime.now().timestamp())
         def format_item(end_timestamp):
@@ -409,8 +409,8 @@ async def cmd_profile(message: Message):
             return "отсутствует"
 
         partner_status = "в активном поиске"
-        if partner_id:
-            partner_name = await get_user_mention_by_id(partner_id)
+        if user["partner_id"]:
+            partner_name = await get_user_mention_by_id(user['partner_id'])
             partner_status = f"в отношениях с {partner_name}"
 
         profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {target_user_msg.from_user.full_name}"
@@ -420,9 +420,9 @@ async def cmd_profile(message: Message):
             f"Уровень: {level} 🐍\n"
             f"Баланс: {balance} 🦎\n"
             f"Статус: {partner_status}\n\n"
-            f"Префикс: {format_item(prefix_end)}\n"
-            f"Антитар: {format_item(antitar_end)}\n"
-            f"VIP: {format_item(vip_end)}"
+            f"Префикс: {format_item(user['prefix_end'])}\n"
+            f"Антитар: {format_item(user['antitar_end'])}\n"
+            f"VIP: {format_item(user['vip_end'])}"
         )
 
         kb = InlineKeyboardBuilder()
@@ -431,7 +431,7 @@ async def cmd_profile(message: Message):
         kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
         kb.adjust(1)
 
-        await message.answer(text, reply_markup=kb.as_markup())
+        await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Ошибка в команде /profile: {e}")
         await message.answer("⚠️ Произошла ошибка при получении профиля.")
@@ -442,7 +442,7 @@ async def cmd_hunt(message: Message):
     await add_user(user_id, message.from_user.username or message.from_user.full_name)
     user = await get_user(user_id)
     now = int(datetime.now().timestamp())
-    last_hunt = user.get("last_hunt", 0)
+    last_hunt = user["last_hunt"] or 0
     cooldown = 24 * 3600 
     if now - last_hunt < cooldown:
         remaining = cooldown - (now - last_hunt)
@@ -451,7 +451,7 @@ async def cmd_hunt(message: Message):
         await message.answer(f"⏳ Охота недоступна. Попробуйте через {int(hours)} ч {int(minutes)} мин.")
         return
     catch = random.randint(1, 10)
-    current_balance = user.get("balance", 0)
+    current_balance = user["balance"] or 0
     new_balance = current_balance + catch
     await update_user_field(user_id, "balance", new_balance)
     await update_user_field(user_id, "last_hunt", now)
@@ -493,25 +493,25 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     await add_user(recipient.id, recipient.username or recipient.full_name)
     sender_data = await get_user(sender.id)
     
-    sender_balance = sender_data.get('balance', 0)
+    sender_balance = sender_data['balance'] or 0
     if sender_balance < amount:
         await message.reply(f"❌ **Недостаточно средств!**\nУ вас на балансе всего {sender_balance} 🦎.")
         return
         
     recipient_data = await get_user(recipient.id)
-    recipient_balance = recipient_data.get('balance', 0)
+    recipient_balance = recipient_data['balance'] or 0
     await update_user_field(sender.id, "balance", sender_balance - amount)
     await update_user_field(recipient.id, "balance", recipient_balance + amount)
     
     sender_mention = await get_user_mention_by_id(sender.id)
     recipient_mention = await get_user_mention_by_id(recipient.id)
-    await message.answer(f"💸 **Перевод успешен!**\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.")
+    await message.answer(f"💸 **Перевод успешен!**\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.", parse_mode="HTML")
 
-# ... (и так далее, все остальные обработчики)
 # --- АДМИН-КОМАНДЫ ---
 @dp.message(or_f(Command("give", "выдать"), F.text.lower().startswith(('give ', 'выдать '))))
 async def cmd_give(message: Message, command: CommandObject = None):
     if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав для использования этой команды.")
         return
 
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
@@ -649,171 +649,93 @@ async def cmd_giveegg(message: Message, command: CommandObject = None):
         await message.answer("Непредвиденная ошибка выполнения команды.")
 
 # --- СИСТЕМА ВИКТОРИНЫ ---
+@dp.message(or_f(Command("quiz", "викторина"), F.text.lower().in_(['quiz', 'викторина'])))
+async def cmd_quiz(message: Message, state: FSMContext):
+    await start_quiz_logic(message.from_user.id, message, state)
 
-# ВСТАВИТЬ ВМЕСТО СТАРЫХ ФУНКЦИЙ ВИКТОРИНЫ
-
-# =========================================================================
-# ================= НОВАЯ ЛОГИКА ВИКТОРИНЫ ================================
-# =========================================================================
-
-async def end_quiz(state: FSMContext, message: Message, reason: str):
-    """Завершает викторину, сохраняет результаты и устанавливает кулдаун."""
-    user_id = message.chat.id
-    data = await state.get_data()
-    score = data.get('score', 0)
-
-    timer_task = data.get('timer_task')
-    if timer_task:
-        timer_task.cancel()
-
-    user_data = await get_user(user_id)
-    highscore = user_data.get('quiz_highscore', 0) if user_data else 0
-    
-    final_text = f"🐍 Викторина завершена! {reason}\n\n"
-    final_text += f"🧠 Ваш счёт: {score}\n"
-    
-    if score > highscore:
-        final_text += f"🏆 Новый рекорд! (Прежний: {highscore})"
-        await update_user_field(user_id, 'quiz_highscore', score)
-    else:
-        final_text += f"🏆 Ваш рекорд: {highscore}"
-
-    cooldown_timestamp = int(datetime.now().timestamp())
-    await update_user_field(user_id, 'last_quiz', cooldown_timestamp)
-    
-    await message.answer(final_text)
-    await state.clear()
-
-async def send_question(state: FSMContext, message: Message):
-    """Отправляет текущий вопрос и запускает таймер."""
-    data = await state.get_data()
-    q_index = data.get('current_question_index', 0)
-    q_ids = data.get('question_ids', [])
-    score = data.get('score', 0)
-
-    if q_index >= len(q_ids):
-        await end_quiz(state, message, reason="Вы ответили на все вопросы!")
-        return
-
-    question_id = q_ids[q_index]
-    q_data = await db_execute("SELECT * FROM quiz_questions WHERE question_id = $1", question_id, fetch='one')
-    
-    if not q_data:
-        await message.answer("Произошла ошибка, вопрос не найден. Викторина завершена.")
-        await state.clear()
-        return
-
-    await state.update_data(correct_answer=q_data['correct_answer'])
-
-    options = json.loads(q_data['options'])
-    random.shuffle(options)
-    kb = InlineKeyboardBuilder()
-    for option in options:
-        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz_answer:{option}"))
-    kb.adjust(1)
-    
-    question_text = (
-        f"<b>Вопрос {q_index + 1} из {len(q_ids)}</b> (Счёт: {score})\n\n"
-        f"{q_data['question_text']}"
-    )
-
-    msg = await message.answer(question_text, reply_markup=kb.as_markup())
-    
-    timer_task = asyncio.create_task(question_timer(state, msg, 60))
-    await state.update_data(question_message_id=msg.message_id, timer_task=timer_task)
-
-async def question_timer(state: FSMContext, message: Message, seconds: int):
-    """Таймер для вопроса. Если время вышло, завершает викторину."""
-    await asyncio.sleep(seconds)
-    
-    if await state.get_state() == QuizStates.in_quiz:
-        data = await state.get_data()
-        if data.get('question_message_id') == message.message_id:
-            try:
-                await message.delete()
-            except TelegramBadRequest:
-                pass
-            await end_quiz(state, message, reason="Время вышло!")
-
-@dp.message(or_f(Command("quiz", "викторина"), F.text.lower() == 'викторина'))
 @dp.callback_query(F.data == "start_quiz")
-async def cmd_start_quiz(event: Message | CallbackQuery, state: FSMContext):
-    """Начинает новую викторину."""
-    user_id = event.from_user.id
+async def cb_start_quiz(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await start_quiz_logic(callback.from_user.id, callback, state, is_callback=True)
+
+async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: FSMContext, is_callback: bool = False):
     user = await get_user(user_id)
+    message = event if not is_callback else event.message
+    
     if not user:
         await add_user(user_id, event.from_user.username or event.from_user.full_name)
         user = await get_user(user_id)
 
     now = int(datetime.now().timestamp())
-    cooldown_end_time = (user.get('last_quiz', 0) or 0) + (QUIZ_COOLDOWN_HOURS * 3600)
+    last_quiz = user['last_quiz'] or 0
+    cooldown = QUIZ_COOLDOWN_HOURS * 3600
 
-    if now < cooldown_end_time:
-        remaining = cooldown_end_time - now
+    if now - last_quiz < cooldown:
+        remaining = cooldown - (now - last_quiz)
         hours, remainder = divmod(remaining, 3600)
         minutes, _ = divmod(remainder, 60)
-        text = f"⏳ Следующая попытка будет доступна через {int(hours)} ч {int(minutes)} мин."
-        if isinstance(event, CallbackQuery):
+        text = f"⏳ Вы уже проходили викторину. Следующая попытка через {int(hours)} ч {int(minutes)} мин."
+        if is_callback:
             await event.answer(text, show_alert=True)
         else:
-            await event.answer(text)
+            await message.answer(text)
         return
 
-    all_q_records = await db_execute("SELECT question_id FROM quiz_questions", fetch='all')
-    if not all_q_records:
-        text = "В базе нет вопросов для викторины. Зайдите позже!"
-        if isinstance(event, CallbackQuery):
+    question_data = await get_random_question()
+    if not question_data:
+        text = "В базе данных пока нет вопросов для викторины. Зайдите позже!"
+        if is_callback:
             await event.answer(text, show_alert=True)
         else:
-            await event.answer(text)
+            await message.answer(text)
         return
-        
-    question_ids = [rec['question_id'] for rec in all_q_records]
-    random.shuffle(question_ids)
-
+    
     await state.set_state(QuizStates.in_quiz)
-    await state.update_data(
-        score=0,
-        current_question_index=0,
-        question_ids=question_ids, # Будут все вопросы
-        timer_task=None
-    )
-    
-    message = event if isinstance(event, Message) else event.message
-    await message.answer("🐍 Начинаем викторину! У вас есть 60 секунд на каждый ответ. Ошибка = конец игры.")
-    await send_question(state, message)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
+    await state.update_data(question_id=question_data['question_id'], correct_answer=question_data['correct_answer'])
 
-@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz_answer:"))
-async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает ответ пользователя на вопрос викторины."""
-    await callback.answer()
+    options = json.loads(question_data['options'])
+    random.shuffle(options)
     
-    data = await state.get_data()
+    kb = InlineKeyboardBuilder()
+    for option in options:
+        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz_answer:{option}"))
+    kb.adjust(1)
     
-    timer_task = data.get('timer_task')
-    if timer_task:
-        timer_task.cancel()
-
+    text = f"🐍 **Вопрос викторины:**\n\n{question_data['question_text']}"
     try:
-        await callback.message.delete()
+        if is_callback:
+            await message.edit_text(text, reply_markup=kb.as_markup())
+        else:
+            await message.answer(text, reply_markup=kb.as_markup())
     except TelegramBadRequest:
         pass
 
+@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz_answer:"))
+async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
     user_answer = callback.data.split(":", 1)[1]
-    correct_answer = data.get('correct_answer')
+    quiz_data = await state.get_data()
+    correct_answer = quiz_data.get('correct_answer')
     
+    if not correct_answer:
+        await callback.answer()
+        return
+
+    user = await get_user(callback.from_user.id)
+    current_level = user['level'] or 0
+
     if user_answer == correct_answer:
-        current_score = data.get('score', 0) + 1
-        current_index = data.get('current_question_index', 0) + 1
-        
-        await state.update_data(score=current_score, current_question_index=current_index)
-        await send_question(state, callback.message)
+        new_level = current_level + 1
+        result_text = f"✅ **Правильно!**\n\nВаш уровень повышен: {current_level} ➡️ {new_level}"
     else:
-        await end_quiz(state, callback.message, reason=f"Неверный ответ! Правильный: {correct_answer}")
+        new_level = max(0, current_level - 1)
+        result_text = f"❌ **Неверно!** Правильный ответ: {correct_answer}\n\nВаш уровень понижен: {current_level} ➡️ {new_level}"
 
-
+    await update_user_field(callback.from_user.id, 'level', new_level)
+    await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
+    await state.clear()
+    
+    await callback.message.edit_text(result_text, reply_markup=None)
+    await callback.answer()
 
 # --- СИСТЕМА ПИТОМЦЕВ ---
 @dp.message(or_f(Command("eggshop", "магазиняиц"), F.text.lower().in_(['eggshop', 'магазиняиц'])))
@@ -1374,7 +1296,7 @@ async def cmd_ping(message: Message):
     if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
         # Можно ничего не отвечать, чтобы не привлекать внимание к команде,
         # либо отправить сообщение ниже:
-         #await message.reply("Эта команда доступна только администраторам группы.")
+        # await message.reply("Эта команда доступна только администраторам группы.")
         return
     # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
