@@ -570,27 +570,33 @@ async def cmd_start_quiz(event: Message | CallbackQuery, state: FSMContext):
     if isinstance(event, CallbackQuery):
         await event.answer()
 
+# ИСПРАВЛЕННЫЙ КОД
 @dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz_answer:"))
 async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    data = await state.get_data()
-    timer_task = data.get('timer_task')
-    if timer_task:
-        timer_task.cancel()
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass
     user_answer = callback.data.split(":", 1)[1]
-    correct_answer = data.get('correct_answer')
-    if user_answer == correct_answer:
-        current_score = data.get('score', 0) + 1
-        current_index = data.get('current_question_index', 0) + 1
-        await state.update_data(score=current_score, current_question_index=current_index)
-        await send_question(state, callback.message)
-    else:
-        await end_quiz(state, callback.message, reason=f"Неверный ответ! Правильный: {correct_answer}")
+    quiz_data = await state.get_data()
+    correct_answer = quiz_data.get('correct_answer')
+    
+    if not correct_answer:
+        await callback.answer()
+        return
 
+    user = await get_user(callback.from_user.id)
+    current_level = user['level'] or 0
+
+    if user_answer == correct_answer:
+        new_level = current_level + 1
+        result_text = f"✅ <b>Правильно!</b>\n\nВаш уровень повышен: {current_level} ➡️ {new_level}"
+    else:
+        new_level = max(0, current_level - 1)
+        result_text = f"❌ <b>Неверно!</b> Правильный ответ: {correct_answer}\n\nВаш уровень понижен: {current_level} ➡️ {new_level}"
+
+    await update_user_field(callback.from_user.id, 'level', new_level)
+    await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
+    await state.clear()
+    
+    await callback.message.edit_text(result_text, reply_markup=None)
+    await callback.answer()
 
 
 
