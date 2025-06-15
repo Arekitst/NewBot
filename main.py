@@ -582,20 +582,34 @@ async def cb_casino_play(callback: CallbackQuery):
     except TelegramBadRequest:
         pass
 
-@dp.message(or_f(Command("dice", "кости"), 
-                 F.text.lower().in_(['dice', 'кости']),
-                 F.text.lower().startswith(('кости ', 'dice '))))
-async def cmd_dice(message: Message, command: CommandObject):
+# Замените вашу старую функцию cmd_dice на эту
+
+@dp.message(or_f(
+    Command("dice", "кости"),
+    F.text.lower().in_(['dice', 'кости']), # <-- Вы правильно добавили эту строку
+    F.text.lower().startswith(('кости ', 'dice '))
+))
+async def cmd_dice(message: Message, command: CommandObject = None):
     if message.chat.type == 'private':
         await message.reply("Эту игру можно использовать только в группах.")
         return
 
-    if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/кости 100`")
+    # ИСПРАВЛЕНО: Добавлена надежная логика извлечения ставки
+    args = None
+    if command and command.args:
+        args = command.args
+    elif ' ' in message.text:
+        try:
+            args = message.text.split(maxsplit=1)[1]
+        except IndexError:
+            args = None
+
+    if not args:
+        await message.reply("❗️ Укажите вашу ставку.\nПример: `кости 100`")
         return
 
     try:
-        bet = int(command.args)
+        bet = int(args) # ИСПРАВЛЕНО: Используем 'args' вместо 'command.args'
         if bet <= 0:
             raise ValueError
     except ValueError:
@@ -621,6 +635,7 @@ async def cmd_dice(message: Message, command: CommandObject):
         reply_markup=kb.as_markup(),
         parse_mode="HTML"
     )
+
 
 @dp.callback_query(F.data.startswith("dice_accept:"))
 async def cb_dice_accept(callback: CallbackQuery):
