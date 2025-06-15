@@ -1248,6 +1248,7 @@ async def cb_mypet(callback: CallbackQuery):
 
     await my_pet_profile_logic(target_user_id, callback, is_callback=True)
 
+# Замените вашу старую функцию my_pet_profile_logic на эту
 async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_callback: bool = False):
     if is_callback: await event.answer()
     message = event if not is_callback else event.message
@@ -1265,12 +1266,19 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         if is_callback:
             try: await message.delete()
             except TelegramBadRequest: pass
-        await bot.send_message(user_id, text, reply_markup=kb.as_markup())
+        # Отправляем сообщение не в чат, а в ЛС пользователю, чтобы избежать спама в группе
+        try:
+            await bot.send_message(user_id, text, reply_markup=kb.as_markup())
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение об отсутствии питомца пользователю {user_id}: {e}")
         return
 
     now_ts = int(datetime.now().timestamp())
-    pet_level = pet['pet_level']
-    pet_species = pet['species']
+    
+    # ИСПРАВЛЕНО: Безопасный доступ ко всем полям через .get()
+    pet_name = pet.get('name', 'Безымянный')
+    pet_species = pet.get('species', 'Неизвестный вид')
+    pet_level = pet.get('pet_level', 1)
     
     def format_time_since(timestamp):
         if not timestamp: return "никогда"
@@ -1278,7 +1286,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         return dt_obj.strftime('%d.%m %H:%M')
 
     caption = (
-        f"🐾 <b>Питомец: {html.escape(pet['name'])}</b> ({html.escape(pet_species)})\n\n"
+        f"🐾 <b>Питомец: {html.escape(pet_name)}</b> ({html.escape(pet_species)})\n\n"
         f"Уровень: {pet_level}\n"
         f"Корм: {format_time_since(pet.get('last_fed', 0))}\n"
     )
@@ -1303,23 +1311,34 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
                 break
     
     try:
-        if is_callback and message.photo:
-            media = types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML")
-            await message.edit_media(media=media, reply_markup=kb.as_markup())
-        else:
-            if is_callback:
+        # Отправляем профиль питомца всегда в личные сообщения, чтобы не засорять чат
+        if is_callback:
+            # Если это колбэк, можно попробовать отредактировать, если сообщение в ЛС
+            if message.chat.type == 'private':
+                 await message.edit_media(
+                    media=types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML"),
+                    reply_markup=kb.as_markup()
+                )
+            else:
+                # Если колбэк из группы, просто удаляем старое сообщение и шлем новое в ЛС
                 await message.delete()
+                await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
+        else:
+            # Если это команда, отправляем в ЛС
             await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
+            # И даем подтверждение в чате, если это была команда из группы
+            if message.chat.type != 'private':
+                await message.reply("✅ Профиль вашего питомца отправлен в личные сообщения.")
+
     except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
+        if "bot was blocked by the user" in str(e) or "chat not found" in str(e):
+             await message.reply("Не могу отправить вам сообщение в ЛС. Пожалуйста, начните диалог со мной и убедитесь, что не заблокировали меня.")
+        elif "message is not modified" in str(e):
             if is_callback: await event.answer("Данные питомца не изменились.")
         else:
             logger.error(f"Не удалось отправить/отредактировать профиль питомца: {e}")
-            try:
-                if is_callback: await message.delete()
-                await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
-            except Exception as final_e:
-                logger.error(f"Финальная попытка отправить профиль питомца тоже не удалась: {final_e}")
+            await bot.send_message(user_id, "Произошла ошибка при отображении профиля питомца.")
+
 
 @dp.callback_query(F.data == "go_to_eggshop")
 async def cb_go_to_eggshop(callback: CallbackQuery):
