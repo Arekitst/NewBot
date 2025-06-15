@@ -9,7 +9,8 @@ import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
-from aiogram.utils.markdown import hlink, quote
+from aiogram.utils.markdown import hlink
+from aiogram.utils.html_decoration import quote # <-- Правильно
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
