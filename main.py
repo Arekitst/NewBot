@@ -882,6 +882,42 @@ async def cb_go_to_eggshop(callback: CallbackQuery):
     await cmd_eggshop(callback.message)
     await callback.answer()
 
+async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new_balance: int, new_end_timestamp: int):
+    """Отправляет уведомление о покупке админам и в специальную группу."""
+    try:
+        # 1. Сбор информации для сообщения
+        user_mention = await get_user_mention_by_id(user_id)
+        purchase_time = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
+        end_time = datetime.fromtimestamp(new_end_timestamp).strftime('%d.%m.%Y %H:%M:%S')
+
+        # 2. Формирование текста уведомления
+        text = (
+            f"🛒 <b>Новая покупка!</b>\n\n"
+            f"👤 <b>Покупатель:</b> {user_mention} (ID: <code>{user_id}</code>)\n"
+            f"🛍️ <b>Товар:</b> {item_name}\n"
+            f"⏳ <b>Срок:</b> {days} дн.\n"
+            f"🦎 <b>Остаток баланса:</b> {new_balance}\n\n"
+            f"🕒 <b>Время покупки:</b> {purchase_time}\n"
+            f"🔚 <b>Окончание подписки:</b> {end_time}"
+        )
+
+        # 3. Определение получателей уведомления
+        target_group_id = -1001863605735
+        # Используем set, чтобы избежать отправки дубликатов в один и тот же чат
+        notification_chat_ids = set(ADMIN_IDS)
+        notification_chat_ids.add(target_group_id)
+
+        # 4. Отправка сообщений всем получателям
+        for chat_id in notification_chat_ids:
+            try:
+                await bot.send_message(chat_id, text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление о покупке в чат {chat_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка в функции уведомления о покупке: {e}")
+
+
 @dp.callback_query(F.data.startswith("pet_action:"))
 async def cb_pet_action(callback: CallbackQuery):
     action = callback.data.split(":")[1]
@@ -977,10 +1013,12 @@ async def cb_buy_item(callback: CallbackQuery):
         item_data = SHOP_ITEMS.get(item_id)
         if not item_data:
             return await callback.answer("Ошибка: товар не найден.", show_alert=True)
+        
         price = item_data["prices"].get(days)
         item_name = item_data["name"]
         if price is None:
             return await callback.answer("Ошибка: цена не найдена.", show_alert=True)
+        
         user = await get_user(user_id)
         if not user:
             return await callback.answer("Сначала напишите /start", show_alert=True)
@@ -992,14 +1030,28 @@ async def cb_buy_item(callback: CallbackQuery):
         
         new_balance = user_balance - price
         await update_user_field(user_id, "balance", new_balance)
+        
         now_ts = int(datetime.now().timestamp())
         add_seconds = days * 24 * 3600
         field_name = f"{item_id}_end"
         current_end = user[field_name] or 0
         new_end = max(current_end, now_ts) + add_seconds
         await update_user_field(user_id, field_name, new_end)
+
+        # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+        # Вызываем функцию уведомления после успешной транзакции
+        await notify_admins_of_purchase(
+            user_id=user_id,
+            item_name=item_name,
+            days=days,
+            new_balance=new_balance,
+            new_end_timestamp=new_end
+        )
+        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+        
         await callback.message.edit_text(f"✅ Покупка успешна! Вы приобрели «{item_name}».\nВаш новый баланс: {new_balance} 🦎")
         await callback.answer()
+        
     except Exception as e:
         logger.exception(f"Error in buy handler: {e}")
         await callback.answer("Произошла ошибка при покупке.", show_alert=True)
@@ -1180,12 +1232,32 @@ async def cancel_divorce(callback: CallbackQuery):
     await callback.message.edit_text("Развод отменен. Ваши отношения в безопасности!")
     await callback.answer()
 
+
+
+# --- ОБРАБОТЧИК АКТИВНОСТИ (ДЛЯ КОМАНДЫ /PING)---
 @dp.message(or_f(Command("ping", "пинг"), F.text.lower().in_(['ping', 'пинг'])))
 async def cmd_ping(message: Message):
-    """Пингует случайного активного пользователя в чате."""
+    """Пингует случайного активного пользователя в чате. Доступно только админам."""
     if message.chat.type not in {'group', 'supergroup'}:
         await message.reply("Эту команду можно использовать только в группах.")
         return
+
+    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+    # Получаем информацию о статусе пользователя в чате
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    except Exception as e:
+        logger.error(f"Не удалось проверить статус пользователя {message.from_user.id} в чате {message.chat.id}: {e}")
+        # Можно отправить сообщение об ошибке или просто молча выйти
+        return
+
+    # Проверяем, является ли пользователь администратором или создателем
+    if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
+        # Можно ничего не отвечать, чтобы не привлекать внимание к команде,
+        # либо отправить сообщение ниже:
+        # await message.reply("Эта команда доступна только администраторам группы.")
+        return
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
     chat_id = message.chat.id
     pinger_id = message.from_user.id
@@ -1210,19 +1282,10 @@ async def cmd_ping(message: Message):
         pinger_mention = await get_user_mention_by_id(pinger_id)
         ping_text = random.choice(PING_MESSAGES)
 
-        await message.answer(f"📞 {target_mention}, пользователь {pinger_mention} спрашивает: «{ping_text}»", parse_mode="HTML")
+        await message.answer(f"📞 {target_mention}, администратор {pinger_mention} спрашивает: «{ping_text}»", parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in ping command while getting user mentions: {e}")
         await message.reply("Не удалось выбрать пользователя для пинга.")
-
-# --- ОБРАБОТЧИК АКТИВНОСТИ (ДЛЯ КОМАНДЫ /PING)---
-@dp.message()
-async def track_user_activity(message: types.Message):
-    """Отслеживает активность пользователей в группах для работы /ping."""
-    if message.chat.type in {'group', 'supergroup'}:
-        if not message.from_user.is_bot:
-            recent_users_activity.setdefault(message.chat.id, {})
-            recent_users_activity[message.chat.id][message.from_user.id] = datetime.now().timestamp()
 
 # --- КОНЕЦ: СКОПИРУЙТЕ СВОИ ОБРАБОТЧИКИ СЮДА ---
 
