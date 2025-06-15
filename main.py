@@ -8,6 +8,8 @@ import asyncio
 import asyncpg  # <-- НОВАЯ БИБЛИОТЕКА
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
+from aiogram.enums import ChatMemberStatus, ParseMode # <--- Добавлен ParseMode
+
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.enums import ChatMemberStatus
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -883,7 +885,7 @@ async def cb_go_to_eggshop(callback: CallbackQuery):
     await callback.answer()
 
 # ИСПРАВЛЕННЫЙ КОД
-async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new_balance: int, new_end_timestamp: int, parse_mode="HTML"):
+async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new_balance: int, new_end_timestamp: int): # Убран parse_mode из аргументов
     """Отправляет уведомление о покупке админам и в специальную группу."""
     try:
         user_mention = await get_user_mention_by_id(user_id)
@@ -1234,24 +1236,21 @@ async def cmd_ping(message: Message):
     """Пингует случайного активного пользователя в чате. Доступно только админам."""
     if message.chat.type not in {'group', 'supergroup'}:
         await message.reply("Эту команду можно использовать только в группах.")
-        return #
+        return
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    # Получаем информацию о статусе пользователя в чате
+    # --- ИСПРАВЛЕНИЕ: Проверка на права администратора ---
     try:
         member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        # Проверяем, является ли пользователь администратором или создателем
+        if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
+            # Молча выходим, если у пользователя нет прав.
+            # Можно добавить ответ, если нужно:
+            # await message.reply("Эта команда доступна только администраторам группы.")
+            return
     except Exception as e:
         logger.error(f"Не удалось проверить статус пользователя {message.from_user.id} в чате {message.chat.id}: {e}")
-        # Можно отправить сообщение об ошибке или просто молча выйти
         return
-
-    # Проверяем, является ли пользователь администратором или создателем
-    if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
-        # Можно ничего не отвечать, чтобы не привлекать внимание к команде,
-        # либо отправить сообщение ниже:
-        # await message.reply("Эта команда доступна только администраторам группы.")
-        return
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     chat_id = message.chat.id
     pinger_id = message.from_user.id
