@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
 from aiogram.utils.markdown import hlink
-from aiogram.utils.html_decoration import quote # <-- Правильно
+from aiogram.utils.html_decoration import quote # <-- ИСПРАВЛЕНО
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -320,6 +320,9 @@ async def cmd_start(message: Message):
 
 @dp.message(or_f(Command("profile", "профиль"), F.text.lower().in_(['profile', 'профиль'])))
 async def cmd_profile(message: Message):
+    # --- НАЧАЛО БЛОКА ДЛЯ ОТЛАДКИ ---
+    # Этот блок поможет нам точно увидеть ошибку и текст, который ее вызывает.
+    text_to_send = "Произошла ошибка при формировании профиля." # Запасной текст
     try:
         target_user_msg = message.reply_to_message or message
         user_id = target_user_msg.from_user.id
@@ -352,7 +355,7 @@ async def cmd_profile(message: Message):
         profile_owner_display_name = await get_user_display_name(user_id, user)
         profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {quote(target_user_msg.from_user.full_name)}"
 
-        text = (
+        text_to_send = (
             f"{profile_title}:\n\n"
             f"Ник: {profile_owner_display_name}\n"
             f"ID: <code>{user_id}</code>\n\n"
@@ -371,10 +374,19 @@ async def cmd_profile(message: Message):
         kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
         kb.adjust(1)
 
-        await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await message.answer(text_to_send, reply_markup=kb.as_markup(), parse_mode="HTML")
+    
+    except TelegramBadRequest as e:
+        # ЭТО САМАЯ ВАЖНАЯ ЧАСТЬ: если Telegram не смог обработать HTML, мы увидим ошибку и сам текст
+        logger.error(f"!!! ОШИБКА ФОРМАТИРОВАНИЯ В CMD_PROFILE !!!")
+        logger.error(f"Сообщение от Telegram API: {e}")
+        logger.error(f"Текст, который не удалось отправить:\n---\n{text_to_send}\n---")
+        await message.answer("⚠️ Произошла внутренняя ошибка при отображении профиля. Администратор уже уведомлен (в логах).")
+
     except Exception as e:
-        logger.exception(f"Ошибка в команде /profile: {e}")
-        await message.answer("⚠️ Произошла ошибка при получении профиля.")
+        logger.exception(f"Неизвестная ошибка в команде /profile: {e}")
+        await message.answer("⚠️ Произошла неизвестная ошибка при получении профиля.")
+    # --- КОНЕЦ БЛОКА ДЛЯ ОТЛАДКИ ---
 
 @dp.message(or_f(Command("setnick", "ник"), F.text.lower().startswith(('ник ', 'setnick '))))
 async def cmd_setnick(message: Message, command: CommandObject):
