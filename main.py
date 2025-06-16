@@ -181,7 +181,7 @@ async def cmd_start(message: Message):
                          "💖 `/marry` / `женить` (в ответ) — сделать предложение.\n"
                          "🥚 `/eggshop` / `магазиняиц` — магазин яиц.\n"
                          "🐾 `/mypet` / `мойпитомец` — управление питомцем.\n"
-                         "📞 `/ping` / `пинг` — позвать игроков в чате.\n\n"
+                         "📞 `/ping [число]` / `пинг [число]` — позвать игроков в чате.\n\n"
                          "<b>Прочее:</b>\n"
                          "⚙️ `/privacy` — Настройки конфиденциальности (в лс).\n"
                          "📊 `/top` — Статистика активности в чате (для админов чата).\n"
@@ -190,32 +190,27 @@ async def cmd_start(message: Message):
     else:
         await message.answer("🐍 Змеиный бот к вашим услугам! Чтобы посмотреть список команд, напишите мне в личные сообщения.")
 
-# ... (Остальной код бота, который я предоставлю в следующем ответе, если понадобится, чтобы избежать превышения лимита)
-
 @dp.message(or_f(Command("profile", "профиль"), F.text.lower().in_(['profile', 'профиль'])))
 async def cmd_profile(message: Message):
     try:
         target_user_msg = message.reply_to_message or message
         user_id = target_user_msg.from_user.id
-        username = target_user_msg.from_user.username or target_user_msg.from_user.full_name
-
-        await add_user(user_id, username)
+        await add_user(user_id, target_user_msg.from_user.username or target_user_msg.from_user.full_name)
         user = await get_user(user_id)
-        if not user:
-            await message.answer("Профиль не найден и не удалось создать.")
-            return
-
+        if not user: return await message.answer("Профиль не найден и не удалось создать.")
         await check_items(user_id)
         user = await get_user(user_id)
 
-        balance = user.get("balance", 0)
-        level = user.get("level", 0)
+        balance_str, level_str = str(user.get("balance", 0)), str(user.get("level", 0))
+        quiz_record_str = str(user.get("quiz_record", 0))
 
+        if message.chat.type != 'private':
+            if user.get('hide_balance', False): balance_str = "[скрыто]"
+            if user.get('hide_level', False): level_str = "[скрыто]"
+        
         now = int(datetime.now().timestamp())
         def format_item(end_timestamp):
-            if end_timestamp and end_timestamp > now:
-                dt = datetime.fromtimestamp(end_timestamp)
-                return f"активен до {dt.strftime('%d.%m.%Y %H:%M')}"
+            if end_timestamp and end_timestamp > now: return f"активен до {datetime.fromtimestamp(end_timestamp).strftime('%d.%m.%Y %H:%M')}"
             return "отсутствует"
 
         partner_status = "в активном поиске"
@@ -226,54 +221,30 @@ async def cmd_profile(message: Message):
         profile_owner_display_name = await get_user_display_name(user_id, user)
         profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {html.escape(target_user_msg.from_user.full_name)}"
 
-        text = (
-            f"{profile_title}:\n\n"
-            f"Ник: {profile_owner_display_name}\n"
-            f"ID: <code>{user_id}</code>\n\n"
-            f"Уровень: {level} 🐍\n"
-            f"Баланс: {balance} 🦎\n"
-            f"Статус: {partner_status}\n\n"
-            f"<b>Улучшения:</b>\n"
-            f"Префикс: {format_item(user.get('prefix_end'))}\n"
-            f"Антитар: {format_item(user.get('antitar_end'))}\n"
-            f"VIP: {format_item(user.get('vip_end'))}"
-        )
+        text = (f"{profile_title}:\n\nНик: {profile_owner_display_name}\nID: <code>{user_id}</code>\n\nУровень: {level_str} 🐍\nРекорд викторины: {quiz_record_str} 🏆\nБаланс: {balance_str} 🦎\nСтатус: {partner_status}\n\n<b>Улучшения:</b>\nПрефикс: {format_item(user.get('prefix_end'))}\nАнтитар: {format_item(user.get('antitar_end'))}\nVIP: {format_item(user.get('vip_end'))}")
 
         kb = InlineKeyboardBuilder()
-        kb.add(types.InlineKeyboardButton(text="🐍 Пройти викторину", callback_data="start_quiz"))
-        kb.add(types.InlineKeyboardButton(text="🐾 Мой питомец", callback_data="my_pet_profile"))
-        kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
+        kb.add(types.InlineKeyboardButton(text="🐍 Пройти викторину", callback_data=f"quiz:start:{user_id}"))
+        kb.add(types.InlineKeyboardButton(text="🐾 Мои питомцы", callback_data=f"pet:list:{user_id}"))
+        kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data=f"shop:main:{user_id}"))
         kb.adjust(1)
-
         await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Ошибка в команде /profile: {e}")
         await message.answer("⚠️ Произошла ошибка при получении профиля.")
-        
-        
-
 
 @dp.message(or_f(Command("setnick", "ник"), F.text.lower().startswith(('ник ', 'setnick '))))
 async def cmd_setnick(message: Message, command: CommandObject):
-    if not command.args:
-        await message.reply(f"❗️ Укажите ник после команды.\nПример: `/ник СнежныйБарс`\n\nТребования: от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.", parse_mode="HTML")
-        return
-        
+    if not command.args: return await message.reply(f"❗️ Укажите ник после команды.\nПример: `/ник СнежныйБарс`\n\nТребования: от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.", parse_mode="HTML")
     nickname = command.args.strip()
-    
-    if not (NICKNAME_MIN_LENGTH <= len(nickname) <= NICKNAME_MAX_LENGTH):
-        await message.reply(f"❌ Длина ника должна быть от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.")
-        return
-        
-    user_id = message.from_user.id
-    await update_user_field(user_id, "nickname", nickname)
+    if not (NICKNAME_MIN_LENGTH <= len(nickname) <= NICKNAME_MAX_LENGTH): return await message.reply(f"❌ Длина ника должна быть от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.")
+    await update_user_field(message.from_user.id, "nickname", nickname)
     await message.reply(f"✅ Ваш ник успешно изменен на: <b>{html.escape(nickname)}</b>", parse_mode="HTML")
 
 @dp.message(or_f(Command("delnick", "удалитьник"), F.text.lower().in_(['delnick', 'удалитьник'])))
 async def cmd_delnick(message: Message):
-    user_id = message.from_user.id
-    await update_user_field(user_id, "nickname", None)
-    await message.reply("✅ Ваш никнейм удален. Теперь будет отображаться ваше имя из Telegram.")
+    await update_user_field(message.from_user.id, "nickname", None)
+    await message.reply("✅ Ваш никнейм удален.")
 
 @dp.message(or_f(Command("hunt", "охота"), F.text.lower().in_(['hunt', 'охота'])))
 async def cmd_hunt(message: Message):
@@ -281,673 +252,481 @@ async def cmd_hunt(message: Message):
     await add_user(user_id, message.from_user.username or message.from_user.full_name)
     user = await get_user(user_id)
     now = int(datetime.now().timestamp())
-    last_hunt = user["last_hunt"] or 0
-    cooldown = 24 * 3600 
+    last_hunt = user.get("last_hunt", 0)
+    cooldown = 24 * 3600
     if now - last_hunt < cooldown:
-        remaining = cooldown - (now - last_hunt)
-        hours, remainder = divmod(remaining, 3600)
-        minutes, _ = divmod(remainder, 60)
-        await message.answer(f"⏳ Охота недоступна. Попробуйте через {int(hours)} ч {int(minutes)} мин.")
-        return
+        next_attempt_time = datetime.fromtimestamp(last_hunt + cooldown).strftime('%H:%M:%S')
+        return await message.answer(f"⏳ Охота недоступна. Попробуйте после {next_attempt_time}.")
     catch = random.randint(1, 10)
-    current_balance = user["balance"] or 0
-    new_balance = current_balance + catch
+    new_balance = user.get("balance", 0) + catch
     await update_user_field(user_id, "balance", new_balance)
     await update_user_field(user_id, "last_hunt", now)
     await message.answer(f"🎉 Вы отправились на охоту и поймали {catch} 🦎!\nВаш новый баланс: {new_balance} 🦎")
 
 @dp.message(or_f(Command("pay", "перевод"), F.text.lower().startswith(('pay ', 'перевод '))))
 async def cmd_pay(message: Message, command: CommandObject = None):
-    if message.chat.type == 'private':
-        await message.answer("Эту команду нужно использовать в группе, отвечая на сообщение пользователя.")
-        return
-
+    if message.chat.type == 'private': return await message.answer("Эту команду нужно использовать в группе, отвечая на сообщение пользователя.")
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot or message.reply_to_message.from_user.id == message.from_user.id:
-        await message.reply("❗️ <b>Ошибка:</b>\nИспользуйте эту команду в ответ на сообщение другого пользователя.", parse_mode="HTML")
-        return
-    
+        return await message.reply("❗️ <b>Ошибка:</b>\nИспользуйте эту команду в ответ на сообщение другого пользователя.", parse_mode="HTML")
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
-
-    if args is None:
-        await message.reply("❗️ <b>Ошибка:</b>\nУкажите сумму для перевода. Пример: `перевод 50`", parse_mode="HTML")
-        return
-
+    if args is None: return await message.reply("❗️ <b>Ошибка:</b>\nУкажите сумму для перевода. Пример: `перевод 50`", parse_mode="HTML")
     try:
         amount = int(args)
-        if amount <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        await message.reply("❗️ <b>Ошибка:</b>\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`", parse_mode="HTML")
-        return
-        
-    sender = message.from_user
-    recipient = message.reply_to_message.from_user
-        
+        if amount <= 0: raise ValueError
+    except (TypeError, ValueError): return await message.reply("❗️ <b>Ошибка:</b>\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`", parse_mode="HTML")
+    sender, recipient = message.from_user, message.reply_to_message.from_user
     await add_user(sender.id, sender.username or sender.full_name)
     await add_user(recipient.id, recipient.username or recipient.full_name)
     sender_data = await get_user(sender.id)
-    
-    sender_balance = sender_data['balance'] or 0
-    if sender_balance < amount:
-        await message.reply(f"❌ <b>Недостаточно средств!</b>\nУ вас на балансе всего {sender_balance} 🦎.", parse_mode="HTML")
-        return
-        
+    if sender_data.get('balance', 0) < amount: return await message.reply(f"❌ <b>Недостаточно средств!</b>\nУ вас на балансе всего {sender_data.get('balance', 0)} 🦎.", parse_mode="HTML")
     recipient_data = await get_user(recipient.id)
-    recipient_balance = recipient_data['balance'] or 0
-    await update_user_field(sender.id, "balance", sender_balance - amount)
-    await update_user_field(recipient.id, "balance", recipient_balance + amount)
-    
-    sender_mention = await get_user_display_name(sender.id)
-    recipient_mention = await get_user_display_name(recipient.id)
+    await update_user_field(sender.id, "balance", sender_data.get('balance', 0) - amount)
+    await update_user_field(recipient.id, "balance", recipient_data.get('balance', 0) + amount)
+    sender_mention, recipient_mention = await get_user_display_name(sender.id), await get_user_display_name(recipient.id)
     await message.answer(f"💸 <b>Перевод успешен!</b>\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.", parse_mode="HTML")
 
-# --- ИГРОВЫЕ МЕХАНИКИ ---
-
-@dp.message(or_f(Command("casino", "казино"), F.text.lower().startswith(('casino ', 'казино '))))
-async def cmd_casino(message: Message, command: CommandObject):
-    user_id = message.from_user.id
-    await add_user(user_id, message.from_user.username or message.from_user.full_name)
-    user_data = await get_user(user_id)
-
-    if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/casino 100`", parse_mode="HTML")
-        return
-
-    try:
-        bet = int(command.args)
-        if bet <= 0:
-            raise ValueError
-    except ValueError:
-        await message.reply("❌ Ставка должна быть положительным числом.")
-        return
-
-    user_balance = user_data.get('balance', 0)
-    if user_balance < bet:
-        await message.reply(f"❌ У вас недостаточно средств! Ваш баланс: {user_balance} 🦎")
-        return
-
-    kb = InlineKeyboardBuilder()
-    kb.add(types.InlineKeyboardButton(text="🔴 Красное (x2)", callback_data=f"casino_play:red:{bet}:{user_id}"))
-    kb.add(types.InlineKeyboardButton(text="⚫️ Черное (x2)", callback_data=f"casino_play:black:{bet}:{user_id}"))
-    kb.add(types.InlineKeyboardButton(text="💚 Зеленое (x10)", callback_data=f"casino_play:green:{bet}:{user_id}"))
-    kb.adjust(2, 1)
-
-    await message.reply(f"🎰 Ваша ставка: {bet} 🦎. Выберите цвет:", reply_markup=kb.as_markup())
-
-@dp.callback_query(F.data.startswith("casino_play:"))
-async def cb_casino_play(callback: CallbackQuery):
-    _, choice, bet_str, player_id_str = callback.data.split(":")
-    bet = int(bet_str)
-    player_id = int(player_id_str)
-
-    if callback.from_user.id != player_id:
-        await callback.answer("Это не ваша игра!", show_alert=True)
-        return
-
-    user_data = await get_user(player_id)
-    user_balance = user_data.get('balance', 0)
-    if user_balance < bet:
-        await callback.answer("Ой, у вас уже недостаточно средств для этой ставки.", show_alert=True)
-        await callback.message.edit_text("Ставка отменена, недостаточно средств.")
-        return
-
-    new_balance = user_balance - bet
-    await update_user_field(player_id, "balance", new_balance)
-    
-    msg = callback.message
-    for frame in CASINO_ANIMATION_FRAMES:
-        try:
-            await msg.edit_text(f"🎰 Вращаем рулетку... {frame}", reply_markup=None)
-            await asyncio.sleep(0.4)
-        except TelegramBadRequest:
-            pass
-
-    population = list(CASINO_WEIGHTS.keys())
-    weights = list(CASINO_WEIGHTS.values())
-    winning_color = random.choices(population, weights=weights, k=1)[0]
-    
-    winning_symbol = {"red": "🔴", "black": "⚫️", "green": "💚"}[winning_color]
-    try:
-        await msg.edit_text(f"🎰 Вращаем рулетку... {winning_symbol}", reply_markup=None)
-        await asyncio.sleep(1)
-    except TelegramBadRequest:
-        pass
-
-    if choice == winning_color:
-        payout_multiplier = CASINO_PAYOUTS[winning_color]
-        winnings = bet * payout_multiplier
-        final_balance = new_balance + winnings
-        await update_user_field(player_id, "balance", final_balance)
-        result_text = (
-            f"🎉 <b>Поздравляем, вы выиграли!</b>\n"
-            f"Выпало: {winning_symbol} {winning_color.capitalize()}\n"
-            f"Ваш выигрыш: <b>{winnings}</b> 🦎\n"
-            f"Новый баланс: {final_balance} 🦎"
-        )
-    else:
-        final_balance = new_balance
-        result_text = (
-            f"😔 <b>Увы, вы проиграли.</b>\n"
-            f"Выпало: {winning_symbol} {winning_color.capitalize()}\n"
-            f"Ваша ставка: {bet} 🦎\n"
-            f"Ваш баланс: {final_balance} 🦎"
-        )
-    
-    try:
-        await msg.edit_text(result_text, parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
-
-@dp.message(or_f(Command("dice", "кости"), F.text.lower().startswith(('кости ', 'dice '))))
-async def cmd_dice(message: Message, command: CommandObject):
-    if message.chat.type == 'private':
-        await message.reply("Эту игру можно использовать только в группах.")
-        return
-
-    if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/кости 100`", parse_mode="HTML")
-        return
-
-    try:
-        bet = int(command.args)
-        if bet <= 0:
-            raise ValueError
-    except ValueError:
-        await message.reply("❌ Ставка должна быть положительным числом.")
-        return
-
-    host_id = message.from_user.id
-    host_data = await get_user(host_id)
-    host_balance = host_data.get('balance', 0)
-
-    if host_balance < bet:
-        await message.reply(f"❌ У вас недостаточно средств для такой ставки! Ваш баланс: {host_balance} 🦎")
-        return
-
-    kb = InlineKeyboardBuilder()
-    kb.add(types.InlineKeyboardButton(text="✅ Принять вызов", callback_data=f"dice_accept:{host_id}:{bet}"))
-
-    host_name = await get_user_display_name(host_id, host_data)
-    await message.answer(
-        f"🎲 <b>Игра в кости!</b>\n\n"
-        f"Игрок {host_name} ставит <b>{bet}</b> 🦎.\n"
-        f"Кто готов принять вызов?",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
-    )
-
-@dp.callback_query(F.data.startswith("dice_accept:"))
-async def cb_dice_accept(callback: CallbackQuery):
-    _, host_id_str, bet_str = callback.data.split(':')
-    host_id = int(host_id_str)
-    bet = int(bet_str)
-
-    challenger_id = callback.from_user.id
-
-    if host_id == challenger_id:
-        await callback.answer("Вы не можете играть сами с собой!", show_alert=True)
-        return
-
-    challenger_data = await get_user(challenger_id)
-    if not challenger_data:
-        await add_user(challenger_id, callback.from_user.username or callback.from_user.full_name)
-        challenger_data = await get_user(challenger_id)
-    
-    challenger_balance = challenger_data.get('balance', 0)
-    if challenger_balance < bet:
-        await callback.answer(f"У вас недостаточно средств для этой ставки. Нужно {bet} 🦎.", show_alert=True)
-        return
-        
-    host_data = await get_user(host_id)
-    if not host_data or host_data.get('balance', 0) < bet:
-        await callback.answer("У создателя игры уже недостаточно средств.", show_alert=True)
-        await callback.message.edit_text("❌ Игра отменена: у создателя недостаточно средств.", reply_markup=None)
-        return
-
-    await callback.message.edit_text("✅ Вызов принят! Бросаем кости...", reply_markup=None)
-
-    host_name = await get_user_display_name(host_id, host_data)
-    challenger_name = await get_user_display_name(challenger_id, challenger_data)
-    
-    await asyncio.sleep(1)
-    
-    game_message = await callback.message.answer(f"🎲 {host_name} бросает кость...", parse_mode="HTML")
-    host_roll_msg = await bot.send_dice(callback.message.chat.id)
-    host_value = host_roll_msg.dice.value
-    
-    await asyncio.sleep(4)
-
-    await game_message.edit_text(f"🎲 {host_name} выбросил(а): <b>{host_value}</b>\n"
-                                 f"🎲 {challenger_name} бросает кость...", parse_mode="HTML")
-    challenger_roll_msg = await bot.send_dice(callback.message.chat.id)
-    challenger_value = challenger_roll_msg.dice.value
-    
-    await asyncio.sleep(4)
-
-    final_text = (
-        f"<b>Результаты игры:</b>\n"
-        f"› {host_name}: <b>{host_value}</b>\n"
-        f"› {challenger_name}: <b>{challenger_value}</b>\n\n"
-    )
-
-    if host_value > challenger_value:
-        new_host_balance = host_data.get('balance', 0) + bet
-        new_challenger_balance = challenger_balance - bet
-        await update_user_field(host_id, 'balance', new_host_balance)
-        await update_user_field(challenger_id, 'balance', new_challenger_balance)
-        final_text += f"🏆 Победитель: {host_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
-    elif challenger_value > host_value:
-        new_host_balance = host_data.get('balance', 0) - bet
-        new_challenger_balance = challenger_balance + bet
-        await update_user_field(host_id, 'balance', new_host_balance)
-        await update_user_field(challenger_id, 'balance', new_challenger_balance)
-        final_text += f"🏆 Победитель: {challenger_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
-    else:
-        final_text += "🤝 Ничья! Ставки возвращены игрокам."
-
-    await game_message.edit_text(final_text, parse_mode="HTML")
-
-# --- АДМИН-КОМАНДЫ ---
-@dp.message(or_f(Command("give", "выдать"), F.text.lower().startswith(('give ', 'выдать '))))
-async def cmd_give(message: Message, command: CommandObject = None):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для использования этой команды.")
-        return
-
-    args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
-
-    if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `give <user_id> <amount>`", parse_mode="MarkdownV2")
-        return
-        
-    try:
-        arg_parts = args.split()
-        if len(arg_parts) != 2: raise ValueError("Неверное количество аргументов")
-        target_id, amount = int(arg_parts[0]), int(arg_parts[1])
-        if amount <= 0: raise ValueError("Сумма должна быть положительной")
-    except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `give <user_id> <сумма>`", parse_mode="MarkdownV2")
-        return
-        
-    target_user = await get_user(target_id)
-    if not target_user:
-        await add_user(target_id, f"User {target_id}")
-        target_user = await get_user(target_id)
-
-    current_balance = target_user["balance"] or 0
-    new_balance = current_balance + amount
-    await update_user_field(target_id, "balance", new_balance)
-    await message.answer(f"✅ Выдали {amount} 🦎 пользователю с ID {target_id}. Новый баланс: {new_balance} 🦎")
-
-@dp.message(or_f(Command("take", "забрать"), F.text.lower().startswith(('take ', 'забрать '))))
-async def cmd_take(message: Message, command: CommandObject = None):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для использования этой команды.")
-        return
-
-    args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
-
-    if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `take <user_id> <amount|all>`", parse_mode="MarkdownV2")
-        return
-
-    try:
-        arg_parts = args.split()
-        if len(arg_parts) != 2: raise ValueError("Неверное количество аргументов")
-        
-        target_id = int(arg_parts[0])
-        amount_str = arg_parts[1]
-
-        target_user = await get_user(target_id)
-        if not target_user:
-            await message.answer(f"Пользователь с ID {target_id} не найден.")
-            return
-        
-        target_balance = target_user['balance'] or 0
-
-        if amount_str.lower() == 'all':
-            amount_to_take = target_balance
-        elif amount_str.isdigit():
-            amount_to_take = int(amount_str)
-        else:
-            raise ValueError("Неверный формат суммы")
-
-        if amount_to_take <= 0:
-                raise ValueError("Сумма должна быть положительной")
-
-        if amount_to_take > target_balance:
-            await message.answer(f"Нельзя забрать больше, чем есть у пользователя ({target_balance} 🦎).")
-            return
-
-        new_balance = target_balance - amount_to_take
-        await update_user_field(target_id, 'balance', new_balance)
-        await message.answer(f"✅ У пользователя ID {target_id} было изъято {amount_to_take} 🦎. Новый баланс: {new_balance} 🦎.")
-
-    except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `take <user_id> <сумма|all>`", parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"Error in /take command: {e}")
-        await message.answer("Непредвиденная ошибка выполнения команды.")
-
-@dp.message(or_f(Command("givelevel", "выдатьуровень"), F.text.lower().startswith(('givelevel ', 'выдатьуровень '))))
-async def cmd_givelevel(message: Message, command: CommandObject = None):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для использования этой команды.")
-        return
-    
-    args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
-
-    if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `givelevel <user_id> <level>`", parse_mode="MarkdownV2")
-        return
-
-    try:
-        arg_parts = args.split()
-        if len(arg_parts) != 2 or not arg_parts[1].isdigit(): raise ValueError
-        target_id, level = int(arg_parts[0]), int(arg_parts[1])
-        
-        target_user = await get_user(target_id)
-        if not target_user:
-            await add_user(target_id, "Unknown by admin")
-        
-        await update_user_field(target_id, 'level', level)
-        await message.answer(f"✅ Пользователю ID {target_id} установлен {level} уровень.")
-    except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `givelevel <user_id> <уровень>`", parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"Error in /givelevel command: {e}")
-        await message.answer("Непредвиденная ошибка выполнения команды.")
-
-@dp.message(or_f(Command("giveegg", "выдатьяйцо"), F.text.lower().startswith(('giveegg ', 'выдатьяйцо '))))
-async def cmd_giveegg(message: Message, command: CommandObject = None):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет прав для использования этой команды.")
-        return
-
-    args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
-
-    if not args:
-        await message.answer(f"❗️ Ошибка: не указаны аргументы.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}", parse_mode="MarkdownV2")
-        return
-
-    try:
-        arg_parts = args.split()
-        if len(arg_parts) != 2 or arg_parts[1] not in EGGS: raise ValueError
-        target_id, egg_type = int(arg_parts[0]), arg_parts[1]
-
-        target_user = await get_user(target_id)
-        if not target_user:
-            await add_user(target_id, "Unknown by admin")
-        
-        await add_user_egg(target_id, egg_type)
-        await message.answer(f"✅ Пользователю ID {target_id} выдано яйцо типа '{egg_type}'.")
-
-    except ValueError:
-        await message.answer(f"❗️ Ошибка в аргументах.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}", parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"Error in /giveegg command: {e}")
-        await message.answer("Непредвиденная ошибка выполнения команды.")
-
-# --- СИСТЕМА ВИКТОРИНЫ ---
-@dp.message(or_f(Command("quiz", "викторина"), F.text.lower().in_(['quiz', 'викторина'])))
-async def cmd_quiz(message: Message, state: FSMContext):
-    await start_quiz_logic(message.from_user.id, message, state)
-
-@dp.callback_query(F.data == "start_quiz")
-async def cb_start_quiz(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await start_quiz_logic(callback.from_user.id, callback, state, is_callback=True)
-
-async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: FSMContext, is_callback: bool = False):
+# --- КОНФИДЕНЦИАЛЬНОСТЬ, СТАТИСТИКА, АДМИН-ПРОФИЛЬ ---
+async def get_privacy_keyboard(user_id: int):
     user = await get_user(user_id)
-    message = event if not is_callback else event.message
-    
-    if not user:
-        await add_user(user_id, event.from_user.username or event.from_user.full_name)
-        user = await get_user(user_id)
-
-    now = int(datetime.now().timestamp())
-    last_quiz = user['last_quiz'] or 0
-    cooldown = QUIZ_COOLDOWN_HOURS * 3600
-
-    if now - last_quiz < cooldown:
-        remaining = cooldown - (now - last_quiz)
-        hours, remainder = divmod(remaining, 3600)
-        minutes, _ = divmod(remainder, 60)
-        text = f"⏳ Вы уже проходили викторину. Следующая попытка через {int(hours)} ч {int(minutes)} мин."
-        if is_callback:
-            await event.answer(text, show_alert=True)
-        else:
-            await message.answer(text)
-        return
-
-    question_data = await get_random_question()
-    if not question_data:
-        text = "В базе данных пока нет вопросов для викторины. Зайдите позже!"
-        if is_callback:
-            await event.answer(text, show_alert=True)
-        else:
-            await message.answer(text)
-        return
-    
-    await state.set_state(QuizStates.in_quiz)
-    await state.update_data(question_id=question_data['question_id'], correct_answer=question_data['correct_answer'])
-
-    options = json.loads(question_data['options'])
-    random.shuffle(options)
-    
     kb = InlineKeyboardBuilder()
-    for option in options:
-        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz_answer:{option}"))
-    kb.adjust(1)
-    
-    text = f"🐍 <b>Вопрос викторины:</b>\n\n{question_data['question_text']}"
-    try:
-        if is_callback:
-            await message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-        else:
-            await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
-
-@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz_answer:"))
-async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
-    user_answer = callback.data.split(":", 1)[1]
-    quiz_data = await state.get_data()
-    correct_answer = quiz_data.get('correct_answer')
-    
-    if not correct_answer:
-        await callback.answer()
-        return
-
-    user = await get_user(callback.from_user.id)
-    current_level = user['level'] or 0
-
-    if user_answer == correct_answer:
-        new_level = current_level + 1
-        result_text = f"✅ <b>Правильно!</b>\n\nВаш уровень повышен: {current_level} ➡️ {new_level}"
-    else:
-        new_level = max(0, current_level - 1)
-        result_text = f"❌ <b>Неверно!</b> Правильный ответ: {correct_answer}\n\nВаш уровень понижен: {current_level} ➡️ {new_level}"
-
-    await update_user_field(callback.from_user.id, 'level', new_level)
-    await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
-    await state.clear()
-    
-    await callback.message.edit_text(result_text, reply_markup=None, parse_mode="HTML")
-    await callback.answer()
-
-#конфа
-# --- НОВЫЙ, ПЕРЕРАБОТАННЫЙ БЛОК НАСТРОЕК КОНФИДЕНЦИАЛЬНОСТИ ---
-
-async def generate_privacy_message_data(user_id: int) -> tuple[str, types.InlineKeyboardMarkup | None]:
-    """
-    Создает текст и клавиатуру для меню настроек приватности.
-    Выполняет всего один запрос к БД.
-    """
-    user = await get_user(user_id)
-    if not user:
-        return ("Не удалось найти ваш профиль.", None)
-
-    balance_hidden = user.get('hide_balance', False)
-    level_hidden = user.get('hide_level', False)
-
-    balance_status = "Скрыт 🔴" if balance_hidden else "Отображается 🟢"
-    level_status = "Скрыт 🔴" if level_hidden else "Отображается 🟢"
-
-    text = (
-        "⚙️ <b>Настройки конфиденциальности</b>\n\n"
-        "Управляйте видимостью данных вашего профиля в общих чатах.\n\n"
-        f"▫️ Ваш баланс: <b>{balance_status}</b>\n"
-        f"▫️ Ваш уровень: <b>{level_status}</b>"
-    )
-
-    kb = InlineKeyboardBuilder()
-    balance_button_text = "Показать баланс" if balance_hidden else "Скрыть баланс"
-    level_button_text = "Показать уровень" if level_hidden else "Скрыть уровень"
-    
-    kb.row(types.InlineKeyboardButton(text=balance_button_text, callback_data="privacy:toggle:balance"))
-    kb.row(types.InlineKeyboardButton(text=level_button_text, callback_data="privacy:toggle:level"))
-    
-    return text, kb.as_markup()
+    balance_hidden, level_hidden = user.get('hide_balance', False), user.get('hide_level', False)
+    balance_text = ("❌ Показать баланс" if balance_hidden else "✅ Скрыть баланс")
+    level_text = ("❌ Показать уровень" if level_hidden else "✅ Скрыть уровень")
+    kb.row(types.InlineKeyboardButton(text=balance_text, callback_data="privacy:toggle:balance"))
+    kb.row(types.InlineKeyboardButton(text=level_text, callback_data="privacy:toggle:level"))
+    return kb.as_markup()
 
 @dp.message(Command("privacy"))
 async def cmd_privacy(message: Message):
-    if message.chat.type != 'private':
-        return await message.reply("Настройки конфиденциальности доступны только в личных сообщениях с ботом.")
-    
-    text, kb = await generate_privacy_message_data(message.from_user.id)
-    
-    if kb:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    else:
-        await message.answer(text)
+    if message.chat.type != 'private': return await message.reply("Настройки конфиденциальности доступны только в личных сообщениях с ботом.")
+    kb = await get_privacy_keyboard(message.from_user.id)
+    await message.answer("⚙️ <b>Настройки конфиденциальности</b>\n\nЗдесь вы можете скрыть отображение вашего баланса и уровня в профилях, которые просматривают в группах.", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("privacy:toggle:"))
 async def cb_toggle_privacy(callback: CallbackQuery):
     user_id = callback.from_user.id
     try:
         field_to_toggle = callback.data.split(":")[2]
-    except IndexError:
-        return await callback.answer("Ошибка данных. Попробуйте снова.", show_alert=True)
-
-    if field_to_toggle not in ['balance', 'level']:
-        return await callback.answer("Неизвестное действие", show_alert=True)
-
+    except IndexError: return await callback.answer("Ошибка данных. Попробуйте снова.", show_alert=True)
+    if field_to_toggle not in ['balance', 'level']: return await callback.answer("Неизвестное действие", show_alert=True)
     field_name = f"hide_{field_to_toggle}"
+    current_user_state = await get_user(user_id)
+    current_value = current_user_state.get(field_name, False)
+    await update_user_field(user_id, field_name, not current_value)
+    kb = await get_privacy_keyboard(user_id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.answer(f"Настройки для '{field_to_toggle}' обновлены.")
+    except TelegramBadRequest: await callback.answer("Не удалось обновить кнопки. Попробуйте вызвать /privacy снова.", show_alert=True)
+
+@dp.message(Command("casinostats"))
+async def cmd_casinostats(message: Message):
+    twenty_four_hours_ago = int(datetime.now().timestamp()) - 24 * 3600
+    stats = await db_execute("SELECT SUM(win_amount) as total_won, SUM(bet_amount) as total_bet FROM casino_logs WHERE timestamp >= $1", twenty_four_hours_ago, fetch='one')
+    if not stats or stats.get('total_bet') is None: return await message.answer("🎰 За последние 24 часа в казино не было игр.")
+    total_won, total_bet = stats.get('total_won', 0) or 0, stats.get('total_bet', 0) or 0
+    total_lost = total_bet - total_won
+    await message.answer(f"<b>🎰 Статистика казино за последние 24 часа</b>\n\n💸 Всего выиграно: {total_won} 🦎\n📉 Всего проиграно: {total_lost} 🦎", parse_mode="HTML")
+
+@dp.message(Command("adminprofile", "админпрофиль"))
+async def cmd_adminprofile(message: Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS: return
+    target_id, target_user_info = None, None
+    if message.reply_to_message:
+        target_id, target_user_info = message.reply_to_message.from_user.id, message.reply_to_message.from_user
+    elif command and command.args:
+        try: target_id = int(command.args)
+        except (ValueError, TypeError): return await message.reply("❗️ Неверный формат ID.")
+    if not target_id: return await message.reply("ℹ️ **Использование:**\n`/adminprofile <user_id>`\n*или*\nОтветьте на сообщение пользователя командой `/adminprofile`.", parse_mode="HTML")
+    user = await get_user(target_id)
+    if not user: return await message.reply(f"❌ Пользователь с ID `{target_id}` не найден в базе данных.")
+    balance_str, level_str = str(user.get("balance", 0)), str(user.get("level", 0))
+    now = int(datetime.now().timestamp())
+    def format_item(ts): return f"активен до {datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')}" if ts and ts > now else "отсутствует"
+    partner_status = "в активном поиске"
+    if user.get("partner_id"): partner_status = f"в отношениях с {await get_user_display_name(user['partner_id'])}"
+    try:
+        if not target_user_info: target_user_info = await bot.get_chat(target_id)
+        display_name = hlink(target_user_info.full_name, f"tg://user?id={target_id}")
+    except Exception: display_name = f"Пользователь (ID: {target_id})"
+    profile_text = (f"👑 <b>Админ-профиль пользователя</b> {display_name}\n\nНик в боте: {html.escape(user.get('nickname', 'не установлен'))}\nID: <code>{target_id}</code>\n\n<b>Реальные данные (без скрытия):</b>\nУровень: {level_str} 🐍\nБаланс: {balance_str} 🦎\n\nСтатус: {partner_status}\n\n<b>Улучшения:</b>\nПрефикс: {format_item(user.get('prefix_end'))}\nАнтитар: {format_item(user.get('antitar_end'))}\nVIP: {format_item(user.get('vip_end'))}")
+    try:
+        await bot.send_message(chat_id=message.from_user.id, text=profile_text, parse_mode="HTML")
+        if message.chat.type != 'private': await message.reply("✅ Профиль пользователя отправлен вам в личные сообщения.")
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e) or "bot was blocked by the user" in str(e):
+            await message.reply("❗️Не могу отправить вам сообщение. Пожалуйста, начните диалог со мной в ЛС и попробуйте снова.")
+        else:
+            logger.error(f"Ошибка при отправке админ-профиля в ЛС: {e}")
+            await message.reply("❌ Произошла непредвиденная ошибка при отправке профиля.")
+
+# --- ИГРОВЫЕ МЕХАНИКИ ---
+@dp.message(or_f(Command("casino", "казино"), F.text.lower().in_(['casino', 'казино']), F.text.lower().startswith(('casino ', 'казино '))))
+async def cmd_casino(message: Message):
+    user_id = message.from_user.id
+    await add_user(user_id, message.from_user.username or message.from_user.full_name)
+    user_data = await get_user(user_id)
+    parts = message.text.split()
+    args = parts[1] if len(parts) > 1 else None
+    if not args: return await message.reply("❗️ Укажите вашу ставку.\nПример: `казино 100`", parse_mode="HTML")
+    try:
+        bet = int(args)
+        if bet <= 0: raise ValueError
+    except (ValueError, TypeError): return await message.reply("❌ Ставка должна быть положительным числом.")
+    if user_data.get('balance', 0) < bet: return await message.reply(f"❌ У вас недостаточно средств! Ваш баланс: {user_data.get('balance', 0)} 🦎")
+    kb = InlineKeyboardBuilder()
+    kb.add(types.InlineKeyboardButton(text="🔴 Красное (x2)", callback_data=f"casino_play:red:{bet}:{user_id}"))
+    kb.add(types.InlineKeyboardButton(text="⚫️ Черное (x2)", callback_data=f"casino_play:black:{bet}:{user_id}"))
+    kb.add(types.InlineKeyboardButton(text="💚 Зеленое (x10)", callback_data=f"casino_play:green:{bet}:{user_id}"))
+    kb.adjust(2, 1)
+    await message.reply(f"🎰 Ваша ставка: {bet} 🦎. Выберите цвет:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("casino_play:"))
+async def cb_casino_play(callback: CallbackQuery):
+    _, choice, bet_str, player_id_str = callback.data.split(":")
+    bet, player_id = int(bet_str), int(player_id_str)
+    if callback.from_user.id != player_id: return await callback.answer("Это не ваша игра!", show_alert=True)
+    user_data = await get_user(player_id)
+    if user_data.get('balance', 0) < bet:
+        await callback.answer("Ой, у вас уже недостаточно средств для этой ставки.", show_alert=True)
+        return await callback.message.edit_text("Ставка отменена, недостаточно средств.")
+    await callback.message.edit_text("⏳ Ставка принята. Вращаем рулетку...", reply_markup=None)
+    new_balance = user_data.get('balance', 0) - bet
+    await update_user_field(player_id, "balance", new_balance)
+    msg = callback.message
+    for frame in CASINO_ANIMATION_FRAMES:
+        try:
+            await msg.edit_text(f"🎰 Вращаем рулетку... {frame}")
+            await asyncio.sleep(0.4)
+        except TelegramBadRequest: pass
+    population, weights = list(CASINO_WEIGHTS.keys()), list(CASINO_WEIGHTS.values())
+    winning_color = random.choices(population, weights=weights, k=1)[0]
+    winning_symbol = {"red": "🔴", "black": "⚫️", "green": "💚"}[winning_color]
+    try:
+        await msg.edit_text(f"🎰 Вращаем рулетку... {winning_symbol}")
+        await asyncio.sleep(1)
+    except TelegramBadRequest: pass
+    winnings = 0
+    if choice == winning_color:
+        payout_multiplier = CASINO_PAYOUTS[winning_color]
+        winnings = bet * payout_multiplier
+        final_balance = new_balance + winnings
+        await update_user_field(player_id, "balance", final_balance)
+        result_text = (f"🎉 <b>Поздравляем, вы выиграли!</b>\nВыпало: {winning_symbol} {winning_color.capitalize()}\nВаш выигрыш: <b>{winnings}</b> 🦎\nНовый баланс: {final_balance} 🦎")
+    else:
+        final_balance = new_balance
+        result_text = (f"😔 <b>Увы, вы проиграли.</b>\nВыпало: {winning_symbol} {winning_color.capitalize()}\nВаша ставка: {bet} 🦎\nВаш баланс: {final_balance} 🦎")
+    await db_execute("INSERT INTO casino_logs (user_id, bet_amount, win_amount, timestamp) VALUES ($1, $2, $3, $4)", player_id, bet, winnings, int(datetime.now().timestamp()))
+    try: await msg.edit_text(result_text, parse_mode="HTML")
+    except TelegramBadRequest: pass
+
+@dp.message(or_f(Command("dice", "кости"), F.text.lower().in_(['dice', 'кости']), F.text.lower().startswith(('кости ', 'dice '))))
+async def cmd_dice(message: Message):
+    if message.chat.type == 'private': return await message.reply("Эту игру можно использовать только в группах.")
+    parts = message.text.split()
+    args = parts[1] if len(parts) > 1 else None
+    if not args: return await message.reply("❗️ Укажите вашу ставку.\nПример: `кости 100`", parse_mode="HTML")
+    try:
+        bet = int(args)
+        if bet <= 0: raise ValueError
+    except (ValueError, TypeError): return await message.reply("❌ Ставка должна быть положительным числом.")
+    host_id = message.from_user.id
+    host_data = await get_user(host_id)
+    if host_data.get('balance', 0) < bet: return await message.reply(f"❌ У вас недостаточно средств для такой ставки! Ваш баланс: {host_data.get('balance', 0)} 🦎")
+    kb = InlineKeyboardBuilder()
+    kb.add(types.InlineKeyboardButton(text="✅ Принять вызов", callback_data=f"dice_accept:{host_id}:{bet}"))
+    host_name = await get_user_display_name(host_id, host_data)
+    await message.answer(f"🎲 <b>Игра в кости!</b>\n\nИгрок {host_name} ставит <b>{bet}</b> 🦎.\nКто готов принять вызов?", reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("dice_accept:"))
+async def cb_dice_accept(callback: CallbackQuery):
+    _, host_id_str, bet_str = callback.data.split(':')
+    host_id, bet = int(host_id_str), int(bet_str)
+    challenger_id = callback.from_user.id
+    if host_id == challenger_id: return await callback.answer("Вы не можете играть сами с собой!", show_alert=True)
+    challenger_data = await get_user(challenger_id)
+    if not challenger_data:
+        await add_user(challenger_id, callback.from_user.username or callback.from_user.full_name)
+        challenger_data = await get_user(challenger_id)
+    if challenger_data.get('balance', 0) < bet: return await callback.answer(f"У вас недостаточно средств для этой ставки. Нужно {bet} 🦎.", show_alert=True)
+    host_data = await get_user(host_id)
+    if not host_data or host_data.get('balance', 0) < bet:
+        await callback.answer("У создателя игры уже недостаточно средств.", show_alert=True)
+        return await callback.message.edit_text("❌ Игра отменена: у создателя недостаточно средств.")
+    await callback.message.edit_text("✅ Вызов принят! Бросаем кости...")
+    host_name, challenger_name = await get_user_display_name(host_id, host_data), await get_user_display_name(challenger_id, challenger_data)
+    await asyncio.sleep(1)
+    game_message = await callback.message.answer(f"🎲 {host_name} бросает кость...", parse_mode="HTML")
+    host_roll_msg = await bot.send_dice(callback.message.chat.id)
+    host_value = host_roll_msg.dice.value
+    await asyncio.sleep(4)
+    await game_message.edit_text(f"🎲 {host_name} выбросил(а): <b>{host_value}</b>\n🎲 {challenger_name} бросает кость...", parse_mode="HTML")
+    challenger_roll_msg = await bot.send_dice(callback.message.chat.id)
+    challenger_value = challenger_roll_msg.dice.value
+    await asyncio.sleep(4)
+    final_text = (f"<b>Результаты игры:</b>\n› {host_name}: <b>{host_value}</b>\n› {challenger_name}: <b>{challenger_value}</b>\n\n")
+    if host_value > challenger_value:
+        new_host_balance, new_challenger_balance = host_data.get('balance', 0) + bet, challenger_data.get('balance', 0) - bet
+        final_text += f"🏆 Победитель: {host_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
+    elif challenger_value > host_value:
+        new_host_balance, new_challenger_balance = host_data.get('balance', 0) - bet, challenger_data.get('balance', 0) + bet
+        final_text += f"🏆 Победитель: {challenger_name}! Он(а) выигрывает <b>{bet*2}</b> 🦎."
+    else:
+        new_host_balance, new_challenger_balance = host_data.get('balance', 0), challenger_data.get('balance', 0)
+        final_text += "🤝 Ничья! Ставки возвращены игрокам."
+    await update_user_field(host_id, 'balance', new_host_balance)
+    await update_user_field(challenger_id, 'balance', new_challenger_balance)
+    await game_message.edit_text(final_text, parse_mode="HTML")
+
+# --- СИСТЕМА ВИКТОРИНЫ ---
+async def quiz_timeout(message: Message, state: FSMContext, user_id: int):
+    await asyncio.sleep(QUIZ_QUESTION_TIME_SECONDS)
+    current_state_data = await state.get_data()
+    if current_state_data.get('question_message_id') == message.message_id:
+        await message.edit_text(f"⌛️ Время вышло! Вы не успели ответить.\n\nСледующая попытка через {QUIZ_FAIL_COOLDOWN_HOURS} часов.", reply_markup=None, parse_mode="HTML")
+        await update_user_field(user_id, 'last_quiz', int(datetime.now().timestamp()))
+        await state.clear()
+
+async def send_next_question(event: types.Message | types.CallbackQuery, state: FSMContext):
+    question_data = await get_random_question()
+    message = event if isinstance(event, types.Message) else event.message
+
+    if not question_data:
+        await message.edit_text("В базе данных закончились вопросы. Викторина завершена.", reply_markup=None)
+        return await state.clear()
     
-    # Обновляем значение в базе данных
-    await db_execute(f"UPDATE users SET {field_name} = NOT COALESCE({field_name}, FALSE) WHERE user_id=$1", user_id)
+    options = json.loads(question_data['options'])
+    random.shuffle(options)
     
-    # Отвечаем на колбэк, чтобы "часики" на кнопке пропали
+    kb = InlineKeyboardBuilder()
+    for option in options:
+        kb.add(types.InlineKeyboardButton(text=option, callback_data=f"quiz:answer:{option}"))
+    kb.adjust(1)
+
+    state_data = await state.get_data()
+    question_num = state_data.get('question_number', 0) + 1
+    
+    await state.update_data(
+        question_id=question_data['question_id'], 
+        correct_answer=question_data['correct_answer'],
+        question_number=question_num
+    )
+    
+    text = f"<b>Вопрос {question_num}/{QUIZ_MAX_QUESTIONS} (осталось {QUIZ_QUESTION_TIME_SECONDS} сек):</b>\n\n{question_data['question_text']}"
+    
+    try:
+        await message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        timer_task = asyncio.create_task(quiz_timeout(message, state, message.chat.id))
+        await state.update_data(timer_task=timer_task, question_message_id=message.message_id)
+    except TelegramBadRequest as e:
+        logger.error(f"Не удалось отредактировать сообщение в викторине: {e}")
+
+
+@dp.callback_query(F.data.startswith("quiz:start"))
+async def cb_start_quiz(callback: CallbackQuery, state: FSMContext):
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError): return await callback.answer("Ошибка данных.", show_alert=True)
+    if callback.from_user.id != target_user_id: return await callback.answer("Это не ваш профиль!", show_alert=True)
+    
+    user = await get_user(target_user_id)
+    now = int(datetime.now().timestamp())
+    last_quiz_ts = user.get('last_quiz', 0)
+    
+    time_since_last_quiz = now - last_quiz_ts
+    
+    if time_since_last_quiz < QUIZ_FAIL_COOLDOWN_HOURS * 3600:
+        time_left = timedelta(seconds=(QUIZ_FAIL_COOLDOWN_HOURS * 3600 - time_since_last_quiz))
+        hours, remainder = divmod(int(time_left.total_seconds()), 3600)
+        minutes, _ = divmod(remainder, 60)
+        return await callback.answer(f"Следующая попытка через {hours}ч {minutes}м.", show_alert=True)
+
+    await state.set_state(QuizStates.in_quiz)
+    await state.update_data(correct_answers_in_a_row=0, question_number=0)
+    await send_next_question(callback, state)
     await callback.answer()
 
-    # Получаем новый текст и клавиатуру
-    new_text, new_kb = await generate_privacy_message_data(user_id)
+@dp.callback_query(QuizStates.in_quiz, F.data.startswith("quiz:answer:"))
+async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
+    state_data = await state.get_data()
+    timer_task = state_data.get('timer_task')
+    if timer_task: timer_task.cancel()
+
+    user_answer = callback.data.split(":", 2)[2]
+    correct_answer = state_data.get('correct_answer')
+    user = await get_user(callback.from_user.id)
     
-    if new_kb:
-        try:
-            # Редактируем исходное сообщение целиком
-            await callback.message.edit_text(new_text, reply_markup=new_kb, parse_mode="HTML")
-        except TelegramBadRequest as e:
-            # Ошибки "message is not modified" можно игнорировать, если пользователь нажал кнопку дважды
-            if "message is not modified" not in str(e):
-                logger.error(f"Ошибка при обновлении меню приватности: {e}")
-
-
+    if user_answer == correct_answer:
+        correct_answers = state_data.get('correct_answers_in_a_row', 0) + 1
+        current_level = user.get('level', 0)
+        current_record = user.get('quiz_record', 0)
+        
+        await update_user_field(callback.from_user.id, 'level', current_level + 1)
+        if correct_answers > current_record:
+            await update_user_field(callback.from_user.id, 'quiz_record', correct_answers)
+            
+        await state.update_data(correct_answers_in_a_row=correct_answers)
+        
+        if correct_answers < QUIZ_MAX_QUESTIONS:
+            await callback.answer(f"✅ Правильно! +1 уровень. Следующий вопрос...", show_alert=False)
+            await send_next_question(callback.message, state)
+        else:
+            await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
+            await callback.message.edit_text(f"🎉 <b>Поздравляем!</b>\n\nВы ответили правильно на все {QUIZ_MAX_QUESTIONS} вопроса. Ваш рекорд обновлен!\n\nСледующая викторина будет доступна через {QUIZ_SUCCESS_COOLDOWN_HOURS} часов.", parse_mode="HTML", reply_markup=None)
+            await state.clear()
+    else:
+        await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
+        await callback.message.edit_text(f"❌ <b>Неверно!</b>\n\nПравильный ответ был: <b>{correct_answer}</b>.\nПопробуйте снова через {QUIZ_FAIL_COOLDOWN_HOURS} часов.", parse_mode="HTML", reply_markup=None)
+        await state.clear()
 
 # --- СИСТЕМА ПИТОМЦЕВ ---
-@dp.message(or_f(Command("eggshop", "магазиняиц"), F.text.lower().in_(['eggshop', 'магазиняиц'])))
-async def cmd_eggshop(message: Message):
-    text = "🥚 <b>Магазин яиц</b> 🥚\n\nВыберите яйцо, чтобы приобрести его:"
+@dp.message(or_f(Command("mypet", "мойпитомец"), F.text.lower().in_(['mypet', 'мойпитомец'])))
+async def cmd_mypet(message: Message):
+    await check_all_pets_death(message.from_user.id)
+    pets = await get_pets(message.from_user.id)
+    if not pets: return await message.reply("У вас пока нет питомцев. Приобрести яйцо можно в /eggshop")
     kb = InlineKeyboardBuilder()
-    for egg_type, data in EGGS.items():
-        kb.add(types.InlineKeyboardButton(text=f"{data['name']} ({data['cost']} 🦎)", callback_data=f"buy_egg:{egg_type}"))
+    for pet in pets:
+        kb.add(types.InlineKeyboardButton(text=f"{pet['name']} ({pet['species']}, {pet['pet_level']} ур.)", callback_data=f"pet:view:{pet['pet_id']}"))
     kb.adjust(1)
-    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-
-@dp.callback_query(F.data.startswith("buy_egg:"))
-async def cb_buy_egg(callback: CallbackQuery):
-    egg_type = callback.data.split(":")[1]
-    egg_data = EGGS.get(egg_type)
-    if not egg_data: return await callback.answer("Такое яйцо не найдено!", show_alert=True)
+    await message.reply("🐾 Выберите питомца для просмотра профиля:", reply_markup=kb.as_markup())
     
-    user_id = callback.from_user.id
-    user = await get_user(user_id)
-    user_balance = user['balance'] or 0
-    
-    if user_balance < egg_data['cost']:
-        return await callback.answer(f"Недостаточно средств! Нужно {egg_data['cost']} 🦎.", show_alert=True)
-    
-    await update_user_field(user_id, 'balance', user_balance - egg_data['cost'])
-    await add_user_egg(user_id, egg_type)
-    
-    await callback.answer(f"Вы успешно купили {egg_data['name']}!", show_alert=True)
-    await callback.message.answer(f"🎉 Вы приобрели {egg_data['name']}! Посмотреть свои яйца и вылупить питомца можно по команде /myeggs или моияйца.", parse_mode="HTML")
-
-@dp.message(or_f(Command("myeggs", "моияйца"), F.text.lower().in_(['myeggs', 'моияйца'])))
-async def cmd_myeggs(message: Message):
-    user_id = message.from_user.id
-    user_eggs = await get_user_eggs(user_id)
-    
-    if not user_eggs:
-        return await message.answer("У вас нет купленных яиц. Загляните в /eggshop или магазин яиц!")
-        
-    text = "🧺 <b>Ваши яйца</b> 🧺\n\nНажмите на кнопку, чтобы вылупить питомца:"
+@dp.callback_query(F.data.startswith("pet:list"))
+async def cb_list_pets(callback: CallbackQuery):
+    target_user_id = int(callback.data.split(":")[2])
+    if callback.from_user.id != target_user_id: return await callback.answer("Это не ваш профиль!", show_alert=True)
+    await check_all_pets_death(target_user_id)
+    pets = await get_pets(target_user_id)
+    if not pets:
+        await callback.answer("У вас пока нет питомцев.", show_alert=True)
+        return await callback.message.delete()
     kb = InlineKeyboardBuilder()
-    for egg in user_eggs:
-        egg_data = EGGS.get(egg['egg_type'])
-        if egg_data:
-            kb.add(types.InlineKeyboardButton(text=f"Вылупить {egg_data['name']}", callback_data=f"hatch_egg:{egg['user_egg_id']}"))
+    for pet in pets:
+        kb.add(types.InlineKeyboardButton(text=f"{pet['name']} ({pet['species']}, {pet['pet_level']} ур.)", callback_data=f"pet:view:{pet['pet_id']}"))
     kb.adjust(1)
-    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-    
+    await callback.message.edit_text("🐾 Выберите питомца для просмотра профиля:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("pet:view:"))
+async def cb_view_pet(callback: CallbackQuery):
+    pet_id = int(callback.data.split(":")[2])
+    pet = await get_single_pet(pet_id)
+    if not pet or pet['owner_id'] != callback.from_user.id:
+        await callback.answer("Это не ваш питомец или он не найден.", show_alert=True)
+        return await callback.message.delete()
+    await my_pet_profile_logic(callback.from_user.id, pet, callback)
+
+async def my_pet_profile_logic(user_id: int, pet: dict, message_or_callback: types.Message | types.CallbackQuery):
+    is_callback = isinstance(message_or_callback, types.CallbackQuery)
+    message_to_handle = message_or_callback.message if is_callback else message_or_callback
+
+    pet_name, pet_species, pet_level = pet.get('name', 'Безымянный'), pet.get('species', 'Неизвестный вид'), pet.get('pet_level', 1)
+    def format_time_since(ts): return datetime.fromtimestamp(ts).strftime('%d.%m %H:%M') if ts else "никогда"
+    caption = (f"🐾 <b>Питомец: {html.escape(pet_name)}</b> ({html.escape(pet_species)})\n\n"
+               f"Уровень: {pet_level}\n"
+               f"Корм: {format_time_since(pet.get('last_fed', 0))}\n")
+    if pet_level >= 10: caption += f"Вода: {format_time_since(pet.get('last_watered', 0))}\n"
+    if pet_level >= 15: caption += f"Прогулка: {format_time_since(pet.get('last_walked', 0))}\n"
+    kb = InlineKeyboardBuilder()
+    kb.add(types.InlineKeyboardButton(text=f"Покормить ({PET_ACTIONS_COST['feed']}🦎)", callback_data=f"pet:action:feed:{pet['pet_id']}"))
+    grow_cooldown_ok = int(datetime.now().timestamp()) - (pet.get('last_grown', 0)) > 24 * 3600
+    kb.add(types.InlineKeyboardButton(text=f"Растить ({PET_ACTIONS_COST['grow']}🦎)" if grow_cooldown_ok else "Растить (КД)", callback_data=f"pet:action:grow:{pet['pet_id']}"))
+    if pet_level >= 10: kb.add(types.InlineKeyboardButton(text=f"Поить ({PET_ACTIONS_COST['water']}🦎)", callback_data=f"pet:action:water:{pet['pet_id']}"))
+    if pet_level >= 15: kb.add(types.InlineKeyboardButton(text=f"Выгуливать ({PET_ACTIONS_COST['walk']}🦎)", callback_data=f"pet:action:walk:{pet['pet_id']}"))
+    kb.row(types.InlineKeyboardButton(text="⬅️ К списку питомцев", callback_data=f"pet:list:{user_id}"))
+    kb.adjust(2)
+    image_url = "https://i.imgur.com/3TSa7A0.png"
+    species_data = next((s for r in PET_SPECIES.values() for s in r if s['species_name'] == pet_species), None)
+    if species_data:
+        for level_threshold, url in sorted(species_data['images'].items(), reverse=True):
+            if pet_level >= level_threshold:
+                image_url = url
+                break
+    try:
+        media = types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML")
+        await message_to_handle.edit_media(media=media, reply_markup=kb.as_markup())
+    except Exception as e:
+        logger.error(f"Не удалось отправить/отредактировать фото питомца: {e}. Использую текстовый режим.")
+        fallback_text = "🖼️ Не удалось загрузить изображение питомца.\n\n" + caption
+        try:
+            await message_to_handle.edit_text(
+                text=fallback_text,
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML"
+            )
+        except Exception as final_e:
+            logger.error(f"Не удалось отправить даже текстовый профиль питомца: {final_e}")
+            if is_callback:
+                await message_or_callback.answer("Произошла ошибка при отображении профиля питомца.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("pet:action:"))
+async def cb_pet_action(callback: CallbackQuery):
+    try:
+        _, _, action, pet_id_str = callback.data.split(":")
+        pet_id = int(pet_id_str)
+    except ValueError: return await callback.answer("Ошибка данных.", show_alert=True)
+    pet = await get_single_pet(pet_id)
+    if not pet or pet['owner_id'] != callback.from_user.id:
+        await callback.answer("Это не ваш питомец.", show_alert=True)
+        return await callback.message.delete()
+    user = await get_user(callback.from_user.id)
+    cost = PET_ACTIONS_COST.get(action, 0)
+    if user.get('balance', 0) < cost: return await callback.answer(f"Недостаточно ящерок! Нужно {cost} 🦎.", show_alert=True)
+    now, updated, result_text = int(datetime.now().timestamp()), False, ""
+    if action == "grow":
+        if now - (pet.get('last_grown', 0)) < 24 * 3600: return await callback.answer("Растить питомца можно только раз в день!", show_alert=True)
+        await db_execute("UPDATE pets SET pet_level = pet_level + 1, last_grown = $1 WHERE pet_id = $2", now, pet_id)
+        result_text, updated = f"Вы вырастили своего питомца! Его новый уровень: {pet['pet_level'] + 1}.", True
+    elif action == "feed":
+        await update_pet_field(pet_id, "last_fed", now)
+        result_text, updated = "Вы покормили питомца.", True
+    elif action == "water":
+        if pet['pet_level'] < 10: return await callback.answer("Эта функция доступна с 10 уровня питомца!", show_alert=True)
+        await update_pet_field(pet_id, "last_watered", now)
+        result_text, updated = "Вы напоили питомца.", True
+    elif action == "walk":
+        if pet['pet_level'] < 15: return await callback.answer("Эта функция доступна с 15 уровня питомца!", show_alert=True)
+        await update_pet_field(pet_id, "last_walked", now)
+        result_text, updated = "Вы выгуляли питомца.", True
+    if updated:
+        await update_user_field(callback.from_user.id, "balance", user.get('balance', 0) - cost)
+        await callback.answer(result_text)
+        updated_pet_data = await get_single_pet(pet_id)
+        await my_pet_profile_logic(callback.from_user.id, updated_pet_data, callback)
+
 @dp.callback_query(F.data.startswith("hatch_egg:"))
 async def cb_hatch_egg(callback: CallbackQuery, state: FSMContext):
-    user_egg_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
-    
+    pets = await get_pets(user_id)
+    if len(pets) >= MAX_PETS: return await callback.answer(f"У вас уже максимальное количество питомцев ({MAX_PETS}).", show_alert=True)
+    user_egg_id = int(callback.data.split(":")[1])
     user = await get_user(user_id)
-    if (user['level'] or 0) < PET_MIN_LEVEL:
-        return await callback.answer(f"Вылуплять питомцев можно только с {PET_MIN_LEVEL} уровня!", show_alert=True)
-        
-    pet = await get_pet(user_id)
-    if pet:
-        return await callback.answer("У вас уже есть питомец! Нельзя завести второго.", show_alert=True)
-        
+    if (user.get('level', 0)) < PET_MIN_LEVEL: return await callback.answer(f"Вылуплять питомцев можно только с {PET_MIN_LEVEL} уровня!", show_alert=True)
     user_eggs = await get_user_eggs(user_id)
     target_egg = next((e for e in user_eggs if e['user_egg_id'] == user_egg_id), None)
-    
     if not target_egg:
         await callback.message.edit_text("Этого яйца у вас больше нет.")
         return await callback.answer()
-        
     await state.set_state(PetHatchStates.waiting_for_name)
     await state.update_data(user_egg_id=user_egg_id, egg_type=target_egg['egg_type'])
-    
     await callback.message.edit_text("Отлично! Как вы назовете своего нового питомца? Введите имя (до 15 символов).")
     await callback.answer()
 
 @dp.message(PetHatchStates.waiting_for_name)
 async def process_pet_name_after_hatch(message: Message, state: FSMContext):
     pet_name = message.text
-    if len(pet_name) > 15:
-        return await message.answer("Имя слишком длинное. Попробуйте еще раз (до 15 символов).")
-
+    if len(pet_name) > 15: return await message.answer("Имя слишком длинное. Попробуйте еще раз (до 15 символов).")
     hatch_data = await state.get_data()
-    user_egg_id = hatch_data['user_egg_id']
-    egg_type = hatch_data['egg_type']
-    
+    user_egg_id, egg_type = hatch_data['user_egg_id'], hatch_data['egg_type']
     egg_rarity = EGGS[egg_type]['rarity']
     possible_species = PET_SPECIES[egg_rarity]
     hatched_species_data = random.choice(possible_species)
     hatched_species_name = hatched_species_data['species_name']
-    
     await delete_user_egg(user_egg_id)
     await create_pet(message.from_user.id, pet_name, hatched_species_name)
     await state.clear()
-    
-    await message.answer(f"🎉 Из яйца вылупился <b>{html.escape(hatched_species_name)}</b>!\nВы назвали его <b>{html.escape(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.", parse_mode="HTML")
+    await message.answer(f"🎉 Из яйца вылупился <b>{html.escape(hatched_species_name)}</b>!\nВы назвали его <b>{html.escape(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet.", parse_mode="HTML")
+
+# ... (Остальные системы без изменений, как в предыдущем ответе)
 
 @dp.message(or_f(Command("mypet", "мойпитомец"), F.text.lower().in_(['mypet', 'мойпитомец'])))
 async def cmd_mypet(message: Message):
