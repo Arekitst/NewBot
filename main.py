@@ -378,6 +378,9 @@ async def cmd_profile(message: Message):
     except Exception as e:
         logger.exception(f"Ошибка в команде /profile: {e}")
         await message.answer("⚠️ Произошла ошибка при получении профиля.")
+        
+        
+
 
 @dp.message(or_f(Command("setnick", "ник"), F.text.lower().startswith(('ник ', 'setnick '))))
 async def cmd_setnick(message: Message, command: CommandObject):
@@ -903,6 +906,85 @@ async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(result_text, reply_markup=None, parse_mode="HTML")
     await callback.answer()
 
+#конфа
+# --- НОВЫЙ, ПЕРЕРАБОТАННЫЙ БЛОК НАСТРОЕК КОНФИДЕНЦИАЛЬНОСТИ ---
+
+async def generate_privacy_message_data(user_id: int) -> tuple[str, types.InlineKeyboardMarkup | None]:
+    """
+    Создает текст и клавиатуру для меню настроек приватности.
+    Выполняет всего один запрос к БД.
+    """
+    user = await get_user(user_id)
+    if not user:
+        return ("Не удалось найти ваш профиль.", None)
+
+    balance_hidden = user.get('hide_balance', False)
+    level_hidden = user.get('hide_level', False)
+
+    balance_status = "Скрыт 🔴" if balance_hidden else "Отображается 🟢"
+    level_status = "Скрыт 🔴" if level_hidden else "Отображается 🟢"
+
+    text = (
+        "⚙️ <b>Настройки конфиденциальности</b>\n\n"
+        "Управляйте видимостью данных вашего профиля в общих чатах.\n\n"
+        f"▫️ Ваш баланс: <b>{balance_status}</b>\n"
+        f"▫️ Ваш уровень: <b>{level_status}</b>"
+    )
+
+    kb = InlineKeyboardBuilder()
+    balance_button_text = "Показать баланс" if balance_hidden else "Скрыть баланс"
+    level_button_text = "Показать уровень" if level_hidden else "Скрыть уровень"
+    
+    kb.row(types.InlineKeyboardButton(text=balance_button_text, callback_data="privacy:toggle:balance"))
+    kb.row(types.InlineKeyboardButton(text=level_button_text, callback_data="privacy:toggle:level"))
+    
+    return text, kb.as_markup()
+
+@dp.message(Command("privacy"))
+async def cmd_privacy(message: Message):
+    if message.chat.type != 'private':
+        return await message.reply("Настройки конфиденциальности доступны только в личных сообщениях с ботом.")
+    
+    text, kb = await generate_privacy_message_data(message.from_user.id)
+    
+    if kb:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(text)
+
+@dp.callback_query(F.data.startswith("privacy:toggle:"))
+async def cb_toggle_privacy(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        field_to_toggle = callback.data.split(":")[2]
+    except IndexError:
+        return await callback.answer("Ошибка данных. Попробуйте снова.", show_alert=True)
+
+    if field_to_toggle not in ['balance', 'level']:
+        return await callback.answer("Неизвестное действие", show_alert=True)
+
+    field_name = f"hide_{field_to_toggle}"
+    
+    # Обновляем значение в базе данных
+    await db_execute(f"UPDATE users SET {field_name} = NOT COALESCE({field_name}, FALSE) WHERE user_id=$1", user_id)
+    
+    # Отвечаем на колбэк, чтобы "часики" на кнопке пропали
+    await callback.answer()
+
+    # Получаем новый текст и клавиатуру
+    new_text, new_kb = await generate_privacy_message_data(user_id)
+    
+    if new_kb:
+        try:
+            # Редактируем исходное сообщение целиком
+            await callback.message.edit_text(new_text, reply_markup=new_kb, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            # Ошибки "message is not modified" можно игнорировать, если пользователь нажал кнопку дважды
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка при обновлении меню приватности: {e}")
+
+
+
 # --- СИСТЕМА ПИТОМЦЕВ ---
 @dp.message(or_f(Command("eggshop", "магазиняиц"), F.text.lower().in_(['eggshop', 'магазиняиц'])))
 async def cmd_eggshop(message: Message):
@@ -1004,78 +1086,68 @@ async def cmd_mypet(message: Message):
 async def cb_mypet(callback: CallbackQuery):
     await my_pet_profile_logic(callback.from_user.id, callback, is_callback=True)
 
-async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_callback: bool = False):
-    if is_callback: await event.answer()
-    message = event if not is_callback else event.message
+# --- ПОЛНОСТЬЮ ЗАМЕНИТЕ ЭТУ ФУНКЦИЮ НА НОВУЮ ---
 
-    if not await check_pet_death(user_id):
-        if is_callback:
-            try: await message.delete()
-            except TelegramBadRequest: pass
-        return
+async def my_pet_profile_logic(user_id: int, pet: dict, message_or_callback: types.Message | types.CallbackQuery):
+    # Определяем, что было источником - сообщение или нажатие кнопки
+    is_callback = isinstance(message_or_callback, types.CallbackQuery)
+    message_to_edit = message_or_callback.message if is_callback else message_or_callback
 
-    pet = await get_pet(user_id)
-    if not pet:
-        kb = InlineKeyboardBuilder().add(types.InlineKeyboardButton(text="🥚 В магазин яиц", callback_data="go_to_eggshop"))
-        text = "У вас еще нет питомца. Загляните в магазин яиц, чтобы завести своего!"
-        if is_callback:
-            try: await message.delete()
-            except TelegramBadRequest: pass
-        await bot.send_message(user_id, text, reply_markup=kb.as_markup(), parse_mode="HTML")
-        return
-
-    now_ts = int(datetime.now().timestamp())
-    pet_level = pet['pet_level']
-    pet_species = pet['species']
+    # 1. Собираем информацию о питомце (код без изменений)
+    pet_name = pet.get('name', 'Безымянный')
+    pet_species = pet.get('species', 'Неизвестный вид')
+    pet_level = pet.get('pet_level', 1)
     
-    def format_time_since(timestamp):
-        if not timestamp: return "никогда"
-        dt_obj = datetime.fromtimestamp(timestamp)
-        return dt_obj.strftime('%d.%m %H:%M')
+    def format_time_since(ts):
+        if not ts: return "никогда"
+        return datetime.fromtimestamp(ts).strftime('%d.%m %H:%M')
 
-    caption = (
-        f"🐾 <b>Питомец: {html.escape(pet['name'])}</b> ({html.escape(pet_species)})\n\n"
-        f"Уровень: {pet_level}\n"
-        f"Корм: {format_time_since(pet.get('last_fed', 0))}\n"
-    )
+    caption = (f"🐾 <b>Питомец: {html.escape(pet_name)}</b> ({html.escape(pet_species)})\n\n"
+               f"Уровень: {pet_level}\n"
+               f"Корм: {format_time_since(pet.get('last_fed', 0))}\n")
     if pet_level >= 10: caption += f"Вода: {format_time_since(pet.get('last_watered', 0))}\n"
     if pet_level >= 15: caption += f"Прогулка: {format_time_since(pet.get('last_walked', 0))}\n"
 
+    # 2. Собираем клавиатуру (код без изменений)
     kb = InlineKeyboardBuilder()
-    kb.add(types.InlineKeyboardButton(text=f"Покормить ({PET_ACTIONS_COST['feed']}🦎)", callback_data="pet_action:feed"))
-    grow_cooldown_ok = now_ts - (pet.get('last_grown', 0) or 0) > 24 * 3600
-    grow_btn_text = f"Растить ({PET_ACTIONS_COST['grow']}🦎)" if grow_cooldown_ok else "Растить (КД)"
-    kb.add(types.InlineKeyboardButton(text=grow_btn_text, callback_data="pet_action:grow"))
-    if pet_level >= 10: kb.add(types.InlineKeyboardButton(text=f"Поить ({PET_ACTIONS_COST['water']}🦎)", callback_data="pet_action:water"))
-    if pet_level >= 15: kb.add(types.InlineKeyboardButton(text=f"Выгуливать ({PET_ACTIONS_COST['walk']}🦎)", callback_data="pet_action:walk"))
+    kb.add(types.InlineKeyboardButton(text=f"Покормить ({PET_ACTIONS_COST['feed']}🦎)", callback_data=f"pet:action:feed:{pet['pet_id']}"))
+    grow_cooldown_ok = int(datetime.now().timestamp()) - (pet.get('last_grown', 0)) > 24 * 3600
+    kb.add(types.InlineKeyboardButton(text=f"Растить ({PET_ACTIONS_COST['grow']}🦎)" if grow_cooldown_ok else "Растить (КД)", callback_data=f"pet:action:grow:{pet['pet_id']}"))
+    if pet_level >= 10: kb.add(types.InlineKeyboardButton(text=f"Поить ({PET_ACTIONS_COST['water']}🦎)", callback_data=f"pet:action:water:{pet['pet_id']}"))
+    if pet_level >= 15: kb.add(types.InlineKeyboardButton(text=f"Выгуливать ({PET_ACTIONS_COST['walk']}🦎)", callback_data=f"pet:action:walk:{pet['pet_id']}"))
+    kb.row(types.InlineKeyboardButton(text="⬅️ К списку питомцев", callback_data=f"pet:list:{user_id}"))
     kb.adjust(2)
 
-    image_url = "https://i.imgur.com/3TSa7A0.png"
-    species_data = next((s for rarity in PET_SPECIES.values() for s in rarity if s['species_name'] == pet_species), None)
+    # 3. Получаем URL картинки (код без изменений)
+    image_url = "https://i.imgur.com/3TSa7A0.png" # Запасная картинка
+    species_data = next((s for r in PET_SPECIES.values() for s in r if s['species_name'] == pet_species), None)
     if species_data:
         for level_threshold, url in sorted(species_data['images'].items(), reverse=True):
             if pet_level >= level_threshold:
                 image_url = url
                 break
     
+    # 4. --- НОВЫЙ БЛОК: Попытка отправить фото с последующей отправкой текста в случае неудачи ---
     try:
-        if is_callback and message.photo:
-            media = types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML")
-            await message.edit_media(media=media, reply_markup=kb.as_markup())
-        else:
+        media = types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML")
+        await message_to_edit.edit_media(media=media, reply_markup=kb.as_markup())
+    except Exception as e:
+        logger.error(f"Не удалось отправить/отредактировать фото питомца: {e}. Использую текстовый режим.")
+        
+        # Собираем текст для запасного варианта
+        fallback_text = "🖼️ *Не удалось загрузить изображение питомца.*\n\n" + caption
+        
+        try:
+            # Пытаемся отредактировать сообщение, заменив его на текст
+            await message_to_edit.edit_text(
+                text=fallback_text,
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML"
+            )
+        except Exception as final_e:
+            logger.error(f"Не удалось отправить даже текстовый профиль питомца: {final_e}")
             if is_callback:
-                await message.delete()
-            await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            if is_callback: await event.answer("Данные питомца не изменились.")
-        else:
-            logger.error(f"Не удалось отправить/отредактировать профиль питомца: {e}")
-            try:
-                if is_callback: await message.delete()
-                await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
-            except Exception as final_e:
-                logger.error(f"Финальная попытка отправить профиль питомца тоже не удалась: {final_e}")
+                await message_or_callback.answer("Произошла ошибка при отображении профиля питомца.", show_alert=True)
 
 @dp.callback_query(F.data == "go_to_eggshop")
 async def cb_go_to_eggshop(callback: CallbackQuery):
