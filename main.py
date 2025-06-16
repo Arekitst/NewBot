@@ -4,13 +4,13 @@ from datetime import datetime
 import os
 import json
 import asyncio
+import html
 
 import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, or_f
 from aiogram.enums import ChatMemberStatus, ParseMode
-from aiogram.utils.markdown import hlink, quote # <-- Добавлены утилиты для безопасного HTML
-
+from aiogram.utils.markdown import hlink
 from aiogram.types import CallbackQuery, Message, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -239,20 +239,14 @@ async def get_random_question():
 # --- Вспомогательные функции ---
 
 async def get_user_display_name(user_id: int, user_record=None) -> str:
-    """
-    Возвращает HTML-безопасный никнейм пользователя, если он есть, 
-    иначе - кликабельное HTML-упоминание.
-    """
     if not user_record:
         user_record = await get_user(user_id)
     
     if user_record and user_record.get('nickname'):
-        # Экранируем ник, чтобы избежать проблем с HTML-разметкой
-        return quote(user_record['nickname'])
+        return html.escape(user_record['nickname'])
     
     try:
         user = await bot.get_chat(user_id)
-        # hlink автоматически экранирует имя пользователя
         return hlink(user.full_name, f"tg://user?id={user.id}")
     except TelegramBadRequest:
         return f"Пользователь (ID: {user_id})"
@@ -265,9 +259,9 @@ async def check_items(user_id: int):
     if not user: return
     now = int(datetime.now().timestamp())
     updates = {}
-    if user["prefix_end"] and user["prefix_end"] < now: updates["prefix_end"] = 0
-    if user["antitar_end"] and user["antitar_end"] < now: updates["antitar_end"] = 0
-    if user["vip_end"] and user["vip_end"] < now: updates["vip_end"] = 0
+    if user.get("prefix_end") and user.get("prefix_end", 0) < now: updates["prefix_end"] = 0
+    if user.get("antitar_end") and user.get("antitar_end", 0) < now: updates["antitar_end"] = 0
+    if user.get("vip_end") and user.get("vip_end", 0) < now: updates["vip_end"] = 0
     for field, value in updates.items(): await update_user_field(user_id, field, value)
 
 async def check_pet_death(owner_id: int):
@@ -276,14 +270,14 @@ async def check_pet_death(owner_id: int):
         return True
     now_ts = int(datetime.now().timestamp())
     death_timestamp = now_ts - (PET_DEATH_DAYS * 24 * 3600)
-    last_action_time = max(pet['last_fed'] or 0, pet['last_watered'] or 0, pet['last_walked'] or 0)
+    last_action_time = max(pet.get('last_fed', 0), pet.get('last_watered', 0), pet.get('last_walked', 0))
     
     if last_action_time > death_timestamp:
         return True
 
     await delete_pet(owner_id)
     try:
-        await bot.send_message(owner_id, f"💔 Ваш питомец {pet['name']} ({pet['species']}) умер от недостатка ухода...")
+        await bot.send_message(owner_id, f"💔 Ваш питомец {pet.get('name', '')} ({pet.get('species', '')}) умер от недостатка ухода...", parse_mode="HTML")
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение о смерти питомца пользователю {owner_id}: {e}")
     return False
@@ -316,7 +310,7 @@ async def cmd_start(message: Message):
             "🐾 `/mypet` / `мойпитомец` — управление питомцем.\n"
             "📞 `/ping` / `пинг` — позвать игроков в чате."
         )
-        await message.answer(tutorial_text)
+        await message.answer(tutorial_text, parse_mode="HTML")
     else:
         await message.answer("🐍 Змеиный бот к вашим услугам! Чтобы посмотреть список команд, напишите мне в личные сообщения.")
 
@@ -352,7 +346,7 @@ async def cmd_profile(message: Message):
             partner_status = f"в отношениях с {partner_name}"
 
         profile_owner_display_name = await get_user_display_name(user_id, user)
-        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {quote(target_user_msg.from_user.full_name)}"
+        profile_title = "👤 Ваш профиль" if user_id == message.from_user.id else f"👤 Профиль {html.escape(target_user_msg.from_user.full_name)}"
 
         text = (
             f"{profile_title}:\n\n"
@@ -373,7 +367,7 @@ async def cmd_profile(message: Message):
         kb.add(types.InlineKeyboardButton(text="🛒 Магазин", callback_data="shop_main"))
         kb.adjust(1)
 
-        await message.answer(text, reply_markup=kb.as_markup())
+        await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Ошибка в команде /profile: {e}")
         await message.answer("⚠️ Произошла ошибка при получении профиля.")
@@ -381,7 +375,7 @@ async def cmd_profile(message: Message):
 @dp.message(or_f(Command("setnick", "ник"), F.text.lower().startswith(('ник ', 'setnick '))))
 async def cmd_setnick(message: Message, command: CommandObject):
     if not command.args:
-        await message.reply(f"❗️ Укажите ник после команды.\nПример: `/ник СнежныйБарс`\n\nТребования: от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.")
+        await message.reply(f"❗️ Укажите ник после команды.\nПример: `/ник СнежныйБарс`\n\nТребования: от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов.", parse_mode="HTML")
         return
         
     nickname = command.args.strip()
@@ -392,7 +386,7 @@ async def cmd_setnick(message: Message, command: CommandObject):
         
     user_id = message.from_user.id
     await update_user_field(user_id, "nickname", nickname)
-    await message.reply(f"✅ Ваш ник успешно изменен на: <b>{quote(nickname)}</b>")
+    await message.reply(f"✅ Ваш ник успешно изменен на: <b>{html.escape(nickname)}</b>", parse_mode="HTML")
 
 @dp.message(or_f(Command("delnick", "удалитьник"), F.text.lower().in_(['delnick', 'удалитьник'])))
 async def cmd_delnick(message: Message):
@@ -428,13 +422,13 @@ async def cmd_pay(message: Message, command: CommandObject = None):
         return
 
     if not message.reply_to_message or message.reply_to_message.from_user.is_bot or message.reply_to_message.from_user.id == message.from_user.id:
-        await message.reply("❗️ <b>Ошибка:</b>\nИспользуйте эту команду в ответ на сообщение другого пользователя.")
+        await message.reply("❗️ <b>Ошибка:</b>\nИспользуйте эту команду в ответ на сообщение другого пользователя.", parse_mode="HTML")
         return
     
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if args is None:
-        await message.reply("❗️ <b>Ошибка:</b>\nУкажите сумму для перевода. Пример: `перевод 50`")
+        await message.reply("❗️ <b>Ошибка:</b>\nУкажите сумму для перевода. Пример: `перевод 50`", parse_mode="HTML")
         return
 
     try:
@@ -442,7 +436,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
         if amount <= 0:
             raise ValueError
     except (TypeError, ValueError):
-        await message.reply("❗️ <b>Ошибка:</b>\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`")
+        await message.reply("❗️ <b>Ошибка:</b>\nНеверный формат суммы. Укажите положительное число. Пример: `перевод 50`", parse_mode="HTML")
         return
         
     sender = message.from_user
@@ -454,7 +448,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     
     sender_balance = sender_data['balance'] or 0
     if sender_balance < amount:
-        await message.reply(f"❌ <b>Недостаточно средств!</b>\nУ вас на балансе всего {sender_balance} 🦎.")
+        await message.reply(f"❌ <b>Недостаточно средств!</b>\nУ вас на балансе всего {sender_balance} 🦎.", parse_mode="HTML")
         return
         
     recipient_data = await get_user(recipient.id)
@@ -464,7 +458,7 @@ async def cmd_pay(message: Message, command: CommandObject = None):
     
     sender_mention = await get_user_display_name(sender.id)
     recipient_mention = await get_user_display_name(recipient.id)
-    await message.answer(f"💸 <b>Перевод успешен!</b>\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.")
+    await message.answer(f"💸 <b>Перевод успешен!</b>\n\n{sender_mention} перевел(а) {amount} 🦎 пользователю {recipient_mention}.", parse_mode="HTML")
 
 # --- ИГРОВЫЕ МЕХАНИКИ ---
 
@@ -475,7 +469,7 @@ async def cmd_casino(message: Message, command: CommandObject):
     user_data = await get_user(user_id)
 
     if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/casino 100`")
+        await message.reply("❗️ Укажите вашу ставку.\nПример: `/casino 100`", parse_mode="HTML")
         return
 
     try:
@@ -559,7 +553,7 @@ async def cb_casino_play(callback: CallbackQuery):
         )
     
     try:
-        await msg.edit_text(result_text)
+        await msg.edit_text(result_text, parse_mode="HTML")
     except TelegramBadRequest:
         pass
 
@@ -570,7 +564,7 @@ async def cmd_dice(message: Message, command: CommandObject):
         return
 
     if not command.args:
-        await message.reply("❗️ Укажите вашу ставку.\nПример: `/кости 100`")
+        await message.reply("❗️ Укажите вашу ставку.\nПример: `/кости 100`", parse_mode="HTML")
         return
 
     try:
@@ -597,7 +591,8 @@ async def cmd_dice(message: Message, command: CommandObject):
         f"🎲 <b>Игра в кости!</b>\n\n"
         f"Игрок {host_name} ставит <b>{bet}</b> 🦎.\n"
         f"Кто готов принять вызов?",
-        reply_markup=kb.as_markup()
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML"
     )
 
 @dp.callback_query(F.data.startswith("dice_accept:"))
@@ -635,14 +630,14 @@ async def cb_dice_accept(callback: CallbackQuery):
     
     await asyncio.sleep(1)
     
-    game_message = await callback.message.answer(f"🎲 {host_name} бросает кость...")
+    game_message = await callback.message.answer(f"🎲 {host_name} бросает кость...", parse_mode="HTML")
     host_roll_msg = await bot.send_dice(callback.message.chat.id)
     host_value = host_roll_msg.dice.value
     
     await asyncio.sleep(4)
 
     await game_message.edit_text(f"🎲 {host_name} выбросил(а): <b>{host_value}</b>\n"
-                                 f"🎲 {challenger_name} бросает кость...")
+                                 f"🎲 {challenger_name} бросает кость...", parse_mode="HTML")
     challenger_roll_msg = await bot.send_dice(callback.message.chat.id)
     challenger_value = challenger_roll_msg.dice.value
     
@@ -669,7 +664,7 @@ async def cb_dice_accept(callback: CallbackQuery):
     else:
         final_text += "🤝 Ничья! Ставки возвращены игрокам."
 
-    await game_message.edit_text(final_text)
+    await game_message.edit_text(final_text, parse_mode="HTML")
 
 # --- АДМИН-КОМАНДЫ ---
 @dp.message(or_f(Command("give", "выдать"), F.text.lower().startswith(('give ', 'выдать '))))
@@ -681,7 +676,7 @@ async def cmd_give(message: Message, command: CommandObject = None):
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `give <user_id> <amount>`")
+        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `give <user_id> <amount>`", parse_mode="MarkdownV2")
         return
         
     try:
@@ -690,7 +685,7 @@ async def cmd_give(message: Message, command: CommandObject = None):
         target_id, amount = int(arg_parts[0]), int(arg_parts[1])
         if amount <= 0: raise ValueError("Сумма должна быть положительной")
     except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `give <user_id> <сумма>`")
+        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `give <user_id> <сумма>`", parse_mode="MarkdownV2")
         return
         
     target_user = await get_user(target_id)
@@ -712,7 +707,7 @@ async def cmd_take(message: Message, command: CommandObject = None):
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `take <user_id> <amount|all>`")
+        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `take <user_id> <amount|all>`", parse_mode="MarkdownV2")
         return
 
     try:
@@ -748,7 +743,7 @@ async def cmd_take(message: Message, command: CommandObject = None):
         await message.answer(f"✅ У пользователя ID {target_id} было изъято {amount_to_take} 🦎. Новый баланс: {new_balance} 🦎.")
 
     except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `take <user_id> <сумма|all>`")
+        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `take <user_id> <сумма|all>`", parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Error in /take command: {e}")
         await message.answer("Непредвиденная ошибка выполнения команды.")
@@ -762,7 +757,7 @@ async def cmd_givelevel(message: Message, command: CommandObject = None):
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if not args:
-        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `givelevel <user_id> <level>`")
+        await message.answer("❗️ Ошибка: не указаны аргументы.\nИспользование: `givelevel <user_id> <level>`", parse_mode="MarkdownV2")
         return
 
     try:
@@ -777,7 +772,7 @@ async def cmd_givelevel(message: Message, command: CommandObject = None):
         await update_user_field(target_id, 'level', level)
         await message.answer(f"✅ Пользователю ID {target_id} установлен {level} уровень.")
     except ValueError:
-        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `givelevel <user_id> <уровень>`")
+        await message.answer("❗️ Ошибка в аргументах.\nИспользование: `givelevel <user_id> <уровень>`", parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Error in /givelevel command: {e}")
         await message.answer("Непредвиденная ошибка выполнения команды.")
@@ -791,7 +786,7 @@ async def cmd_giveegg(message: Message, command: CommandObject = None):
     args = command.args if command else (message.text.split(maxsplit=1)[1] if ' ' in message.text else None)
 
     if not args:
-        await message.answer(f"❗️ Ошибка: не указаны аргументы.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}")
+        await message.answer(f"❗️ Ошибка: не указаны аргументы.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}", parse_mode="MarkdownV2")
         return
 
     try:
@@ -807,7 +802,7 @@ async def cmd_giveegg(message: Message, command: CommandObject = None):
         await message.answer(f"✅ Пользователю ID {target_id} выдано яйцо типа '{egg_type}'.")
 
     except ValueError:
-        await message.answer(f"❗️ Ошибка в аргументах.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}")
+        await message.answer(f"❗️ Ошибка в аргументах.\nИспользование: `giveegg <user_id> <type>`\nДоступные типы: {', '.join(EGGS.keys())}", parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Error in /giveegg command: {e}")
         await message.answer("Непредвиденная ошибка выполнения команды.")
@@ -868,9 +863,9 @@ async def start_quiz_logic(user_id: int, event: Message | CallbackQuery, state: 
     text = f"🐍 <b>Вопрос викторины:</b>\n\n{question_data['question_text']}"
     try:
         if is_callback:
-            await message.edit_text(text, reply_markup=kb.as_markup())
+            await message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
         else:
-            await message.answer(text, reply_markup=kb.as_markup())
+            await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     except TelegramBadRequest:
         pass
 
@@ -898,7 +893,7 @@ async def cb_process_quiz_answer(callback: CallbackQuery, state: FSMContext):
     await update_user_field(callback.from_user.id, 'last_quiz', int(datetime.now().timestamp()))
     await state.clear()
     
-    await callback.message.edit_text(result_text, reply_markup=None)
+    await callback.message.edit_text(result_text, reply_markup=None, parse_mode="HTML")
     await callback.answer()
 
 # --- СИСТЕМА ПИТОМЦЕВ ---
@@ -909,7 +904,7 @@ async def cmd_eggshop(message: Message):
     for egg_type, data in EGGS.items():
         kb.add(types.InlineKeyboardButton(text=f"{data['name']} ({data['cost']} 🦎)", callback_data=f"buy_egg:{egg_type}"))
     kb.adjust(1)
-    await message.answer(text, reply_markup=kb.as_markup())
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buy_egg:"))
 async def cb_buy_egg(callback: CallbackQuery):
@@ -928,7 +923,7 @@ async def cb_buy_egg(callback: CallbackQuery):
     await add_user_egg(user_id, egg_type)
     
     await callback.answer(f"Вы успешно купили {egg_data['name']}!", show_alert=True)
-    await callback.message.answer(f"🎉 Вы приобрели {egg_data['name']}! Посмотреть свои яйца и вылупить питомца можно по команде /myeggs или моияйца.")
+    await callback.message.answer(f"🎉 Вы приобрели {egg_data['name']}! Посмотреть свои яйца и вылупить питомца можно по команде /myeggs или моияйца.", parse_mode="HTML")
 
 @dp.message(or_f(Command("myeggs", "моияйца"), F.text.lower().in_(['myeggs', 'моияйца'])))
 async def cmd_myeggs(message: Message):
@@ -945,7 +940,7 @@ async def cmd_myeggs(message: Message):
         if egg_data:
             kb.add(types.InlineKeyboardButton(text=f"Вылупить {egg_data['name']}", callback_data=f"hatch_egg:{egg['user_egg_id']}"))
     kb.adjust(1)
-    await message.answer(text, reply_markup=kb.as_markup())
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     
 @dp.callback_query(F.data.startswith("hatch_egg:"))
 async def cb_hatch_egg(callback: CallbackQuery, state: FSMContext):
@@ -992,7 +987,7 @@ async def process_pet_name_after_hatch(message: Message, state: FSMContext):
     await create_pet(message.from_user.id, pet_name, hatched_species_name)
     await state.clear()
     
-    await message.answer(f"🎉 Из яйца вылупился <b>{quote(hatched_species_name)}</b>!\nВы назвали его <b>{quote(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.")
+    await message.answer(f"🎉 Из яйца вылупился <b>{html.escape(hatched_species_name)}</b>!\nВы назвали его <b>{html.escape(pet_name)}</b>.\n\nПоздравляем! Заботьтесь о нем с помощью команды /mypet или мойпитомец.", parse_mode="HTML")
 
 @dp.message(or_f(Command("mypet", "мойпитомец"), F.text.lower().in_(['mypet', 'мойпитомец'])))
 async def cmd_mypet(message: Message):
@@ -1019,7 +1014,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         if is_callback:
             try: await message.delete()
             except TelegramBadRequest: pass
-        await bot.send_message(user_id, text, reply_markup=kb.as_markup())
+        await bot.send_message(user_id, text, reply_markup=kb.as_markup(), parse_mode="HTML")
         return
 
     now_ts = int(datetime.now().timestamp())
@@ -1032,7 +1027,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
         return dt_obj.strftime('%d.%m %H:%M')
 
     caption = (
-        f"🐾 <b>Питомец: {quote(pet['name'])}</b> ({quote(pet_species)})\n\n"
+        f"🐾 <b>Питомец: {html.escape(pet['name'])}</b> ({html.escape(pet_species)})\n\n"
         f"Уровень: {pet_level}\n"
         f"Корм: {format_time_since(pet.get('last_fed', 0))}\n"
     )
@@ -1058,12 +1053,12 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
     
     try:
         if is_callback and message.photo:
-            media = types.InputMediaPhoto(media=image_url, caption=caption)
+            media = types.InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML")
             await message.edit_media(media=media, reply_markup=kb.as_markup())
         else:
             if is_callback:
                 await message.delete()
-            await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup())
+            await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
             if is_callback: await event.answer("Данные питомца не изменились.")
@@ -1071,7 +1066,7 @@ async def my_pet_profile_logic(user_id: int, event: Message | CallbackQuery, is_
             logger.error(f"Не удалось отправить/отредактировать профиль питомца: {e}")
             try:
                 if is_callback: await message.delete()
-                await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup())
+                await bot.send_photo(user_id, photo=image_url, caption=caption, reply_markup=kb.as_markup(), parse_mode="HTML")
             except Exception as final_e:
                 logger.error(f"Финальная попытка отправить профиль питомца тоже не удалась: {final_e}")
 
@@ -1101,7 +1096,7 @@ async def notify_admins_of_purchase(user_id: int, item_name: str, days: int, new
 
         for chat_id in notification_chat_ids:
             try:
-                await bot.send_message(chat_id, text)
+                await bot.send_message(chat_id, text, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление о покупке в чат {chat_id}: {e}")
     except Exception as e:
@@ -1235,7 +1230,7 @@ async def cb_buy_item(callback: CallbackQuery):
             new_end_timestamp=new_end
         )
         
-        await callback.message.edit_text(f"✅ Покупка успешна! Вы приобрели «{item_name}».\nВаш новый баланс: {new_balance} 🦎")
+        await callback.message.edit_text(f"✅ Покупка успешна! Вы приобрели «{item_name}».\nВаш новый баланс: {new_balance} 🦎", parse_mode="HTML")
         await callback.answer()
         
     except Exception as e:
@@ -1245,7 +1240,7 @@ async def cb_buy_item(callback: CallbackQuery):
 # --- СИСТЕМА ПОПОЛНЕНИЯ ЧЕРЕЗ TELEGRAM STARS ---
 @dp.message(or_f(Command("topup", "пополнить"), F.text.lower().in_(['topup', 'пополнить'])))
 async def cmd_topup(message: Message, state: FSMContext):
-    await message.answer("Введите количество ящерок, которое вы хотите купить.\n\n▫️ <b>Курс:</b> 3 ящерки = 1 ★\n▫️ <b>Лимиты:</b> от 20 до 10 000 ящерок за раз.\n▫️ Количество должно быть кратно 3.\n\nДля отмены просто напишите /cancel или отмена.")
+    await message.answer("Введите количество ящерок, которое вы хотите купить.\n\n▫️ <b>Курс:</b> 3 ящерки = 1 ★\n▫️ <b>Лимиты:</b> от 20 до 10 000 ящерок за раз.\n▫️ Количество должно быть кратно 3.\n\nДля отмены просто напишите /cancel или отмена.", parse_mode="HTML")
     await state.set_state(TopupStates.waiting_for_amount)
 
 @dp.message(or_f(Command("cancel", "отмена"), F.text.lower().in_(['cancel', 'отмена'])), F.state == TopupStates.waiting_for_amount)
@@ -1264,7 +1259,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
     if lizards_to_buy % 3 != 0:
         lower = (lizards_to_buy // 3) * 3
         upper = lower + 3
-        return await message.answer(f"❌ Количество ящерок должно быть кратно 3.\n\nВы можете купить, например, {lower if lower >= 20 else upper} или {upper} 🦎.")
+        return await message.answer(f"❌ Количество ящерок должно быть кратно 3.\n\nВы можете купить, например, {lower if lower >= 20 else upper} или {upper} 🦎.", parse_mode="HTML")
     stars_price = lizards_to_buy // 3
     await state.clear()
     await bot.send_invoice(chat_id=message.from_user.id, title=f"Покупка {lizards_to_buy} 🦎", description=f"Пакет из {lizards_to_buy} ящерок для вашего баланса в боте.", payload=f"lizard_topup:{message.from_user.id}:{lizards_to_buy}", currency="XTR", prices=[LabeledPrice(label=f"{lizards_to_buy} 🦎", amount=stars_price)])
@@ -1285,7 +1280,7 @@ async def successful_payment_handler(message: Message):
         current_balance = user['balance'] or 0
         new_balance = current_balance + lizards_to_add
         await update_user_field(user_id, 'balance', new_balance)
-        await bot.send_message(chat_id=user_id, text=f"✅ Оплата прошла успешно!\n\nВам начислено: {lizards_to_add} 🦎\nВаш новый баланс: {new_balance} 🦎")
+        await bot.send_message(chat_id=user_id, text=f"✅ Оплата прошла успешно!\n\nВам начислено: {lizards_to_add} 🦎\nВаш новый баланс: {new_balance} 🦎", parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in successful_payment_handler: {e}")
         await bot.send_message(chat_id=message.from_user.id, text="Произошла ошибка при начислении ящерок. Пожалуйста, свяжитесь с администратором.")
@@ -1311,22 +1306,22 @@ async def cmd_marry(message: Message):
     if (proposer_data['level'] or 0) < MARRIAGE_MIN_LEVEL:
         return await message.reply(f"❌ Для вступления в брак нужен {MARRIAGE_MIN_LEVEL} уровень. Ваш уровень: {proposer_data['level'] or 0}.")
     if (target_data['level'] or 0) < MARRIAGE_MIN_LEVEL:
-        return await message.reply(f"❌ У пользователя {await get_user_display_name(target.id)} недостаточный уровень для брака ({target_data['level'] or 0}/{MARRIAGE_MIN_LEVEL}).")
+        return await message.reply(f"❌ У пользователя {await get_user_display_name(target.id)} недостаточный уровень для брака ({target_data['level'] or 0}/{MARRIAGE_MIN_LEVEL}).", parse_mode="HTML")
     
     if proposer_data['partner_id']:
         return await message.reply("Вы уже состоите в отношениях.")
     if (proposer_data['balance'] or 0) < MARRIAGE_COST:
         return await message.reply(f"❌ Для предложения нужно {MARRIAGE_COST} 🦎.\nУ вас на балансе: {proposer_data['balance'] or 0} 🦎.")
     if target_data['partner_id']:
-        return await message.reply(f"{await get_user_display_name(target.id)} уже состоит в отношениях.")
+        return await message.reply(f"{await get_user_display_name(target.id)} уже состоит в отношениях.", parse_mode="HTML")
     if target_data['proposal_from_id']:
-        return await message.reply(f"У {await get_user_display_name(target.id)} уже есть активное предложение. Дождитесь ответа.")
+        return await message.reply(f"У {await get_user_display_name(target.id)} уже есть активное предложение. Дождитесь ответа.", parse_mode="HTML")
 
     kb = InlineKeyboardBuilder()
     kb.add(types.InlineKeyboardButton(text="Да, я уверен", callback_data=f"marry_confirm:{proposer.id}:{target.id}"))
     kb.add(types.InlineKeyboardButton(text="Отмена", callback_data="marry_cancel"))
     target_mention = await get_user_display_name(target.id)
-    await message.reply(f"Вы уверены, что хотите сделать предложение {target_mention}?\nСтоимость этого действия: {MARRIAGE_COST} 🦎.\n\nЭто действие нельзя будет отменить.", reply_markup=kb.as_markup())
+    await message.reply(f"Вы уверены, что хотите сделать предложение {target_mention}?\nСтоимость этого действия: {MARRIAGE_COST} 🦎.\n\nЭто действие нельзя будет отменить.", reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.message(or_f(Command("accept", "принять"), F.text.lower().in_(['accept', 'принять'])))
 async def cmd_accept(message: Message):
@@ -1346,7 +1341,7 @@ async def cmd_accept(message: Message):
     await update_user_field(user_id, "proposal_from_id", 0)
     user_mention = await get_user_display_name(user_id)
     proposer_mention = await get_user_display_name(proposer_id)
-    await message.answer(f"💖 Поздравляем! {proposer_mention} и {user_mention} теперь официально состоят в отношениях! 💖")
+    await message.answer(f"💖 Поздравляем! {proposer_mention} и {user_mention} теперь официально состоят в отношениях! 💖", parse_mode="HTML")
 
 @dp.message(or_f(Command("divorce", "развод"), F.text.lower().in_(['divorce', 'развод'])))
 async def cmd_divorce(message: Message):
@@ -1385,7 +1380,7 @@ async def confirm_marry(callback: CallbackQuery):
         proposer_mention = await get_user_display_name(proposer_id)
         target_mention = await get_user_display_name(target_id)
         await callback.message.edit_text("Предложение успешно отправлено!")
-        await callback.message.answer(f"💍 {target_mention}, вам поступило предложение руки и сердца от {proposer_mention}!\n\nЧтобы принять его, напишите команду `/accept` или `принять`.")
+        await callback.message.answer(f"💍 {target_mention}, вам поступило предложение руки и сердца от {proposer_mention}!\n\nЧтобы принять его, напишите команду `/accept` или `принять`.", parse_mode="HTML")
         await callback.answer()
     except Exception as e:
         logger.error(f"Error during marriage confirmation: {e}")
@@ -1410,7 +1405,7 @@ async def confirm_divorce(callback: CallbackQuery):
     user_mention = await get_user_display_name(user_id)
     partner_mention = await get_user_display_name(partner_id)
     await callback.message.edit_text("Отношения разорваны.")
-    await callback.message.answer(f"💔 {user_mention} и {partner_mention} больше не вместе. 💔")
+    await callback.message.answer(f"💔 {user_mention} и {partner_mention} больше не вместе. 💔", parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_divorce")
@@ -1452,7 +1447,7 @@ async def cmd_ping(message: Message):
         target_mentions = [await get_user_display_name(uid) for uid in target_ids]
         mentions_str = ", ".join(target_mentions)
         
-        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{quote(ping_text)}»", disable_notification=False)
+        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{html.escape(ping_text)}»", disable_notification=False, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in ping command while getting user mentions: {e}")
         await message.reply("Не удалось выбрать пользователя для пинга.")
@@ -1477,8 +1472,6 @@ async def main():
     await create_pool()
     await init_db()
     await populate_questions()
-    
-    bot.default_parse_mode = "HTML"
     
     try:
         await dp.start_polling(bot)
