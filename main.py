@@ -1423,48 +1423,78 @@ async def cancel_divorce(callback: CallbackQuery):
 # --- ОБРАБОТЧИК АКТИВНОСТИ И ПИНГА ---
 # --- ПОЛНОСТЬЮ ЗАМЕНИТЕ ЭТУ ФУНКЦИЮ ---
 
-@dp.message(or_f(Command("ping", "пинг"), F.text.lower().in_(['ping', 'пинг'])))
+# --- ПОЛНОСТЬЮ ЗАМЕНИТЕ ЭТУ ФУНКЦИЮ НА НОВУЮ ---
+
+@dp.message(or_f(Command("ping", "пинг"), F.text.lower().in_(['ping', 'пинг']), F.text.lower().startswith(('ping ', 'пинг '))))
 async def cmd_ping(message: Message):
     if message.chat.type not in {'group', 'supergroup'}:
         return await message.reply("Эту команду можно использовать только в группах.")
 
-    chat_id = message.chat.id
-    pinger_id = message.from_user.id
-    now = int(datetime.now().timestamp())
+    # --- НОВЫЙ БЛОК: Определение количества повторений ---
+    parts = message.text.split()
+    repeat_count = 1
+    if len(parts) > 1 and parts[1].isdigit():
+        # Пользователь указал, сколько раз пинговать, например "пинг 5"
+        repeat_count = int(parts[1])
+    
+    # Ограничение, чтобы избежать спама
+    if repeat_count > 5:
+        repeat_count = 5
+        await message.reply("Максимальное количество повторений пинга — 5 раз.", parse_mode="HTML")
+    
+    # --- НОВЫЙ БЛОК: Цикл для повторения пингов ---
+    for i in range(repeat_count):
+        chat_id = message.chat.id
+        pinger_id = message.from_user.id
+        now = int(datetime.now().timestamp())
 
-    if chat_id not in recent_users_activity or len(recent_users_activity.get(chat_id, {})) < 2:
-        return await message.reply("Я еще не видел здесь достаточно активности, некого пинговать.")
+        if chat_id not in recent_users_activity:
+            # Если это первая итерация, отправляем ошибку. Если нет, просто выходим из цикла.
+            if i == 0:
+                await message.reply("Я еще не видел никого в этом чате, некого пинговать.")
+            break
 
-    # Получаем ВСЕХ пользователей, которых бот когда-либо видел в этом чате
-    all_known_users_in_chat = list(recent_users_activity.get(chat_id, {}).keys())
+        # Получаем ВСЕХ пользователей, которых бот когда-либо видел в этом чате
+        all_known_users_in_chat = list(recent_users_activity.get(chat_id, {}).keys())
 
-    # Фильтруем пользователей: не админы, не сам пингующий, и не на кулдауне в 5 минут
-    eligible_users = [
-        uid for uid in all_known_users_in_chat
-        if uid != pinger_id and uid not in ADMIN_IDS and (now - ping_cooldowns.get(uid, 0) > 300) # 300 секунд = 5 минут
-    ]
+        # Фильтруем пользователей: не админы, не сам пингующий, не на кулдауне в 5 минут
+        eligible_users = [
+            uid for uid in all_known_users_in_chat
+            if uid != pinger_id and uid not in ADMIN_IDS and (now - ping_cooldowns.get(uid, 0) > 300)
+        ]
 
-    if not eligible_users:
-        return await message.reply("Сейчас нет доступных для пинга пользователей (все либо админы, либо недавно уже упоминались).")
+        if not eligible_users:
+            if i == 0:
+                await message.reply("Сейчас нет доступных для пинга пользователей (все либо админы, либо недавно уже упоминались).")
+            break # Выходим из цикла, если пинговать больше некого
 
-    # Выбираем до 3-х случайных пользователей из подходящих
-    k = min(len(eligible_users), 3)
-    target_ids = random.sample(eligible_users, k)
+        # ИЗМЕНЕНО: Бот будет стараться выбрать 3 человека, если это возможно
+        k = min(len(eligible_users), 3)
+        if k == 0: # Еще одна проверка на случай, если все отфильтровались
+            if i == 0:
+                await message.reply("Не нашлось ни одного пользователя для пинга.")
+            break
 
-    try:
-        pinger_mention = await get_user_display_name(pinger_id)
-        ping_text = random.choice(PING_MESSAGES)
-        target_mentions = [await get_user_display_name(uid) for uid in target_ids]
-        
-        # Обновляем время последнего пинга для выбранных пользователей
-        for uid in target_ids:
-            ping_cooldowns[uid] = now
+        target_ids = random.sample(eligible_users, k)
+
+        try:
+            pinger_mention = await get_user_display_name(pinger_id)
+            ping_text = random.choice(PING_MESSAGES)
+            target_mentions = [await get_user_display_name(uid) for uid in target_ids]
             
-        mentions_str = ", ".join(target_mentions)
-        await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{html.escape(ping_text)}»", disable_notification=False, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Error in ping command while getting user mentions: {e}")
-        await message.reply("Не удалось выбрать пользователя для пинга.")
+            # Обновляем время последнего пинга для выбранных пользователей
+            for uid in target_ids:
+                ping_cooldowns[uid] = now
+                
+            mentions_str = ", ".join(target_mentions)
+            await message.answer(f"📞 {pinger_mention} зовет {mentions_str}: «{html.escape(ping_text)}»", disable_notification=False, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error in ping command while getting user mentions: {e}")
+            await message.reply("Не удалось выбрать пользователя для пинга.")
+
+        # Добавляем небольшую задержку между пингами, если их несколько
+        if repeat_count > 1:
+            await asyncio.sleep(1.5)
 
 @dp.message(F.chat.type.in_({'group', 'supergroup'}))
 async def track_user_activity(message: Message):
